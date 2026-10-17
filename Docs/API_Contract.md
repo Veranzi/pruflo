@@ -105,13 +105,13 @@ Findings come from the rule engine (plan Step 11). Until it runs, cases have no 
 
 | # | Method and path | Body | Response |
 | --- | --- | --- | --- |
-| 17 | `POST /v1/cases/{caseId}/reports` | `{"type": "summary"\|"detailed"\|"executive", "sections": ["evidence", "timeline", "findings", "recommendations"]}` | `202 Report` with `status: "queued"` |
+| 17 | `POST /v1/cases/{caseId}/reports` | `{"type": "summary"\|"detailed"\|"executive", "sections": ["evidence", "timeline", "findings", "recommendations"], "format": "pdf"\|"docx"}` (format defaults to `pdf`) | `202 Report` with `status: "queued"` |
 | 18 | `GET /v1/cases/{caseId}/reports` | | list of `Report` |
-| 19 | `GET /v1/cases/{caseId}/reports/{reportId}/download-url` | | `{"url", "expires_at"}`; `409` until `ready` |
+| 19 | `GET /v1/cases/{caseId}/reports/{reportId}/download-url?disposition=attachment\|inline` | | `{"url", "expires_at"}`; `409` until `ready`. `attachment` (default) downloads the file; `inline` opens it in the browser, a preview for PDFs |
 
 ```json
 Report = { "id": "rpt_...", "case_id": "case_...", "title": "PL-001 Detailed report", "type": "detailed",
-           "format": "pdf", "status": "queued" | "ready" | "failed", "requested_by": {"uid", "name"} | null,
+           "format": "pdf" | "docx", "status": "queued" | "ready" | "failed", "requested_by": {"uid", "name"} | null,
            "created_at": "...", "completed_at": null }
 ```
 

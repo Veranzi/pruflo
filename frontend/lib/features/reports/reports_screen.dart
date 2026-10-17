@@ -23,6 +23,14 @@ enum _ReportType {
 
 enum _ExportFormat { json, csv }
 
+enum _ReportFormat {
+  pdf('PDF'),
+  docx('Word');
+
+  const _ReportFormat(this.label);
+  final String label;
+}
+
 /// Report sections and their API names.
 const _sectionNames = {
   'Evidence Summary': 'evidence',
@@ -35,7 +43,8 @@ const _sectionNames = {
 ///
 /// API: POST /v1/cases/{caseId}/reports (17) starts generation in the
 /// worker, GET .../reports (18) lists them, and GET .../download-url (19)
-/// returns a signed URL for the PDF. GET /v1/cases/{caseId}/export (50)
+/// returns a signed URL to preview (PDF) or download the file. Reports are
+/// PDF or Word. GET /v1/cases/{caseId}/export (50)
 /// returns the findings as JSON or CSV for other systems.
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, this.initialCaseId});
@@ -123,6 +132,7 @@ class _CaseReports extends StatefulWidget {
 class _CaseReportsState extends State<_CaseReports> {
   final _api = PrufloApi();
   _ReportType _type = _ReportType.detailed;
+  _ReportFormat _format = _ReportFormat.pdf;
   final _sections = {for (final s in _sectionNames.keys) s: true};
   bool _generating = false;
   _ExportFormat _exportFormat = _ExportFormat.json;
@@ -167,14 +177,18 @@ class _CaseReportsState extends State<_CaseReports> {
   Future<void> _generate() async {
     setState(() => _generating = true);
     try {
-      await _api.requestReport(widget.caseId, _type.name, [
-        for (final e in _sections.entries)
-          if (e.value) _sectionNames[e.key]!,
-      ]);
+      await _api.requestReport(
+          widget.caseId,
+          _type.name,
+          [
+            for (final e in _sections.entries)
+              if (e.value) _sectionNames[e.key]!,
+          ],
+          format: _format.name);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Generating the report for Case #${_case.reference}. '
-            'It will appear in the list when ready.'),
+        content: Text('Generating the ${_format.label} report for Case '
+            '#${_case.reference}. It will appear in the list when ready.'),
       ));
       await _loadReports();
     } catch (e) {
@@ -184,9 +198,10 @@ class _CaseReportsState extends State<_CaseReports> {
     }
   }
 
-  Future<void> _download(ReportItem r) async {
+  Future<void> _open(ReportItem r, {required bool preview}) async {
     try {
-      await openUrl(await _api.reportDownloadUrl(widget.caseId, r.id));
+      await openUrl(
+          await _api.reportDownloadUrl(widget.caseId, r.id, preview: preview));
     } catch (e) {
       if (mounted) showError(context, e);
     }
@@ -300,6 +315,22 @@ class _CaseReportsState extends State<_CaseReports> {
                 ),
               ),
             const SizedBox(height: 16),
+            const _Label('Format'),
+            SegmentedButton<_ReportFormat>(
+              segments: [
+                for (final f in _ReportFormat.values)
+                  ButtonSegment(
+                    value: f,
+                    label: Text(f.label),
+                    icon: Icon(f == _ReportFormat.pdf
+                        ? Icons.picture_as_pdf_outlined
+                        : Icons.description_outlined),
+                  ),
+              ],
+              selected: {_format},
+              onSelectionChanged: (s) => setState(() => _format = s.first),
+            ),
+            const SizedBox(height: 16),
             const _Label('Include'),
             for (final entry in _sections.entries)
               CheckboxListTile(
@@ -313,7 +344,9 @@ class _CaseReportsState extends State<_CaseReports> {
             const SizedBox(height: 16),
             FilledButton(
               onPressed: _generating || !anySection ? null : _generate,
-              child: Text(_generating ? 'Starting…' : 'Generate Report'),
+              child: Text(_generating
+                  ? 'Starting…'
+                  : 'Generate ${_format.label} Report'),
             ),
           ],
         ],
@@ -385,7 +418,12 @@ class _CaseReportsState extends State<_CaseReports> {
                         for (final r in reports)
                           _ReportRow(
                             report: r,
-                            onDownload: r.ready ? () => _download(r) : null,
+                            onPreview: r.previewable
+                                ? () => _open(r, preview: true)
+                                : null,
+                            onDownload: r.ready
+                                ? () => _open(r, preview: false)
+                                : null,
                           ),
                       ],
                     ),
@@ -438,8 +476,10 @@ class _Label extends StatelessWidget {
 }
 
 class _ReportRow extends StatelessWidget {
-  const _ReportRow({required this.report, required this.onDownload});
+  const _ReportRow(
+      {required this.report, required this.onPreview, required this.onDownload});
   final ReportItem report;
+  final VoidCallback? onPreview;
   final VoidCallback? onDownload;
 
   @override
@@ -453,7 +493,7 @@ class _ReportRow extends StatelessWidget {
     };
     return InkWell(
       borderRadius: BorderRadius.circular(8),
-      onTap: onDownload,
+      onTap: onPreview ?? onDownload,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
         child: Row(
@@ -462,11 +502,16 @@ class _ReportRow extends StatelessWidget {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: AppColors.dangerSoft,
+                color:
+                    report.isWord ? AppColors.primarySoft : AppColors.dangerSoft,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(Icons.picture_as_pdf_outlined,
-                  size: 18, color: AppColors.danger),
+              child: Icon(
+                  report.isWord
+                      ? Icons.description_outlined
+                      : Icons.picture_as_pdf_outlined,
+                  size: 18,
+                  color: report.isWord ? AppColors.primary : AppColors.danger),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -479,7 +524,7 @@ class _ReportRow extends StatelessWidget {
                           fontSize: 13, fontWeight: FontWeight.w600)),
                   Text(
                       [
-                        'PDF',
+                        report.formatLabel,
                         if (report.requestedBy != null)
                           report.requestedBy!.name,
                         timeAgo(report.createdAt),
@@ -491,8 +536,14 @@ class _ReportRow extends StatelessWidget {
               ),
             ),
             ?status,
+            if (onPreview != null)
+              IconButton(
+                tooltip: 'Preview',
+                icon: const Icon(Icons.visibility_outlined, size: 18),
+                onPressed: onPreview,
+              ),
             IconButton(
-              tooltip: 'Download PDF',
+              tooltip: 'Download ${report.formatLabel}',
               icon: const Icon(Icons.download_outlined, size: 18),
               onPressed: onDownload,
             ),

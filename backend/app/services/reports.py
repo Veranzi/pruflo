@@ -28,20 +28,34 @@ from app.ids import new_id
 from app.services import audit, outbox
 
 EXPORT_SCHEMA_VERSION = "1.0"
-REPORT_TEMPLATE_VERSION = "pdf-1"
+REPORT_TEMPLATE_VERSION = "outline-1"
 ReportType = Literal["summary", "detailed", "executive"]
+DocumentFormat = Literal["pdf", "docx"]
+# File extension and media type of each report format.
+REPORT_FILES = {
+    ReportFormat.PDF: ("pdf", "application/pdf"),
+    ReportFormat.DOCX: (
+        "docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+}
 SECTIONS = ("evidence", "timeline", "findings", "recommendations")
 GENERATE_REPORT = "report.generate"
 
 
 def request_report(
-    db: Session, principal: Principal, case: Case, report_type: ReportType, sections: list[str]
+    db: Session,
+    principal: Principal,
+    case: Case,
+    report_type: ReportType,
+    sections: list[str],
+    report_format: DocumentFormat = "pdf",
 ) -> Report:
     report = Report(
         id=new_id("rpt"),
         tenant_id=case.tenant_id,
         case_id=case.id,
-        format=ReportFormat.PDF,
+        format=ReportFormat(report_format),
         status=ReportStatus.QUEUED,
         title=f"{case.reference} {report_type.capitalize()} report",
         template_version=REPORT_TEMPLATE_VERSION,
@@ -58,7 +72,11 @@ def request_report(
         "report",
         report.id,
         case_id=case.id,
-        details={"title": f"Requested {report.title}", "type": report_type},
+        details={
+            "title": f"Requested {report.title} ({report_format.upper()})",
+            "type": report_type,
+            "format": report_format,
+        },
     )
     return report
 

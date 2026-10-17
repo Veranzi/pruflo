@@ -511,7 +511,7 @@ class CaseAnswer {
   final List<({String type, String id})> citations;
 }
 
-/// A generated PDF report (endpoints 17–19).
+/// A generated report, PDF or Word (endpoints 17–19).
 class ReportItem {
   const ReportItem({
     required this.id,
@@ -520,6 +520,7 @@ class ReportItem {
     required this.status,
     required this.createdAt,
     this.type = '',
+    this.format = 'pdf',
     this.completedAt,
     this.requestedBy,
   });
@@ -529,6 +530,7 @@ class ReportItem {
         caseId: j['case_id'] as String,
         title: (j['title'] as String?) ?? 'Report',
         type: (j['type'] as String?) ?? '',
+        format: (j['format'] as String?) ?? 'pdf',
         status: (j['status'] as String?) ?? 'queued',
         createdAt: _date(j['created_at']),
         completedAt: _dateOrNull(j['completed_at']),
@@ -539,6 +541,7 @@ class ReportItem {
   final String caseId;
   final String title;
   final String type;
+  final String format; // pdf or docx
   final String status; // queued, ready, failed
   final DateTime createdAt;
   final DateTime? completedAt;
@@ -546,6 +549,11 @@ class ReportItem {
 
   bool get ready => status == 'ready';
   bool get queued => status == 'queued';
+  bool get isWord => format == 'docx';
+
+  /// Browsers can show PDFs themselves; Word files can only be downloaded.
+  bool get previewable => ready && !isWord;
+  String get formatLabel => isWord ? 'Word' : 'PDF';
 }
 
 /// A person in the organisation, as admins see them (endpoint 24).

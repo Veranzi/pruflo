@@ -437,6 +437,21 @@ class FakeApi {
       if (r.method == 'GET' && sub == '/reports') {
         return json(page(_list([report])));
       }
+      if (r.method == 'POST' && sub == '/reports') {
+        final body = jsonDecode(r.body) as Map<String, dynamic>;
+        return json({
+          ...report,
+          'id': 'rpt_2',
+          'format': body['format'] ?? 'pdf',
+          'status': 'queued',
+        }, 202);
+      }
+      if (r.method == 'GET' && sub.endsWith('/download-url')) {
+        return json({
+          'url': 'https://files.test/${r.url.queryParameters['disposition']}',
+          'expires_at': _at,
+        });
+      }
       if (r.method == 'POST' && sub.endsWith('/decision')) {
         final body = jsonDecode(r.body) as Map<String, dynamic>;
         finding = {
