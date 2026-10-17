@@ -42,7 +42,9 @@ class ObjectInfo:
 
 class Storage(Protocol):
     def upload_request(self, key: str, content_type: str, max_bytes: int) -> SignedRequest: ...
-    def view_url(self, key: str, file_name: str, content_type: str) -> SignedRequest: ...
+    def view_url(
+        self, key: str, file_name: str, content_type: str, inline: bool = True
+    ) -> SignedRequest: ...
     def stat(self, key: str) -> ObjectInfo | None: ...
     def read(self, key: str) -> bytes: ...
     def write(self, key: str, data: bytes, content_type: str) -> None: ...
@@ -52,6 +54,10 @@ class Storage(Protocol):
 def _expiry() -> tuple[timedelta, datetime]:
     ttl = timedelta(minutes=get_settings().signed_url_minutes)
     return ttl, datetime.now(UTC) + ttl
+
+
+def attachment_extra(file_name: str) -> str:
+    return f"attachment\n{file_name}"
 
 
 def _disposition(file_name: str, inline: bool = True) -> str:
@@ -89,13 +95,15 @@ class GcsStorage:
         )
         return SignedRequest(url=url, method="PUT", expires_at=expires_at, headers=headers)
 
-    def view_url(self, key: str, file_name: str, content_type: str) -> SignedRequest:
+    def view_url(
+        self, key: str, file_name: str, content_type: str, inline: bool = True
+    ) -> SignedRequest:
         ttl, expires_at = _expiry()
         url = self._bucket.blob(key).generate_signed_url(
             version="v4",
             expiration=ttl,
             method="GET",
-            response_disposition=_disposition(file_name),
+            response_disposition=_disposition(file_name, inline),
             response_type=content_type,
             **self._signing_kwargs(),
         )
@@ -152,8 +160,15 @@ class SignedLinks:
         url += f"&max={max_bytes}&ct={quote(content_type)}"
         return SignedRequest(url, "PUT", expires_at, headers={"Content-Type": content_type})
 
-    def view_url(self, key: str, file_name: str, content_type: str) -> SignedRequest:
-        url, expires_at = self._url("GET", key)
+    def view_url(
+        self, key: str, file_name: str, content_type: str, inline: bool = True
+    ) -> SignedRequest:
+        if inline:
+            url, expires_at = self._url("GET", key)
+        else:
+            # The download name is signed too, so a link can't be re-labelled.
+            url, expires_at = self._url("GET", key, attachment_extra(file_name))
+            url += f"&dl={quote(file_name)}"
         return SignedRequest(url, "GET", expires_at)
 
     # Implemented by each store.

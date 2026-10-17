@@ -79,6 +79,7 @@ class JobStatus(StrEnum):
 
 class ReportFormat(StrEnum):
     PDF = "pdf"
+    DOCX = "docx"
     JSON = "json"
     CSV = "csv"
 

@@ -64,12 +64,75 @@ def test_generate_list_and_download_detailed_report(client: TestClient, make: Fa
         "Qty ordered: 100",
         "Timeline",
         "human interpretation",
-        "Next steps",
+        "Recommendations",
+        "Findings & Conclusion",
+        "Conclusion: 1 finding(s)",
     ):
         assert expected in text, expected
 
     activity = client.get("/v1/me/activity", headers=reviewer.headers).json()["items"]
     assert "report_generated" in {a["kind"] for a in activity}
+
+
+def test_word_report_has_the_same_content(client: TestClient, make: Factory) -> None:
+    from docx import Document
+
+    reviewer, case = _decided_case(client, make)
+    res = client.post(
+        f"/v1/cases/{case.id}/reports",
+        headers=reviewer.headers,
+        json={"type": "detailed", "format": "docx"},
+    )
+    assert res.status_code == 202 and res.json()["format"] == "docx"
+    report = client.get(f"/v1/cases/{case.id}/reports", headers=reviewer.headers).json()["items"][0]
+    assert report["status"] == "ready"
+
+    link = client.get(
+        f"/v1/cases/{case.id}/reports/{report['id']}/download-url", headers=reviewer.headers
+    ).json()["url"]
+    parts = urlsplit(link)
+    file = client.get(f"{parts.path}?{parts.query}")
+    assert file.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert file.headers["content-disposition"].startswith("attachment;")
+    assert ".docx" in file.headers["content-disposition"]
+    document = Document(io.BytesIO(file.content))
+    text = "\n".join(p.text for p in document.paragraphs)
+    header = document.sections[0].header.paragraphs[0]
+    assert "PruFlo" in header.text and case.reference in header.text
+    assert header._p.xpath(".//pic:pic")  # the logo
+    assert "page" in document.sections[0].footer.paragraphs[0].text
+    for expected in (
+        case.reference,
+        "Quantity shortfall",
+        "reject by Rita Reviewer",
+        "Timeline",
+        "Recommendations",
+        "Conclusion: 1 finding(s)",
+    ):
+        assert expected in text, expected
+
+
+def test_preview_links_open_in_the_browser(client: TestClient, make: Factory) -> None:
+    reviewer, case = _decided_case(client, make)
+    client.post(f"/v1/cases/{case.id}/reports", headers=reviewer.headers, json={})
+    report = client.get(f"/v1/cases/{case.id}/reports", headers=reviewer.headers).json()["items"][0]
+    base = f"/v1/cases/{case.id}/reports/{report['id']}/download-url"
+
+    preview = client.get(f"{base}?disposition=inline", headers=reviewer.headers).json()["url"]
+    parts = urlsplit(preview)
+    shown = client.get(f"{parts.path}?{parts.query}")
+    assert shown.headers["content-disposition"].startswith("inline;")
+    assert shown.content.startswith(b"%PDF")
+
+    # A download link's file name is signed: changing it breaks the link.
+    download = client.get(base, headers=reviewer.headers).json()["url"]
+    parts = urlsplit(download)
+    assert "dl=" in parts.query
+    tampered = parts.query.replace("dl=", "dl=evil-")
+    assert client.get(f"{parts.path}?{tampered}").status_code == 403
+    assert client.get(f"{parts.path}?{parts.query}").status_code == 200
 
 
 def test_executive_report_is_short(client: TestClient, make: Factory) -> None:

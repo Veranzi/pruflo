@@ -722,3 +722,37 @@ def test_gemini_api_key_target(
     assert request.url.path == "/v1beta/models/gemini-2.5-flash:generateContent"
     assert request.headers["x-goog-api-key"] == "test-key"
     assert "authorization" not in request.headers
+
+
+def test_document_kind_is_inferred_when_the_reader_leaves_it_out() -> None:
+    """A model can skip document_type; the fields still show what the file is."""
+    from app.pipeline.claims.schema import DocumentType
+    from app.services.reconcile import infer_kind
+
+    assert infer_kind({"order_reference", "delivered_quantity"}) == DocumentType.DELIVERY_NOTE
+    assert infer_kind({"invoiced_quantity", "total_amount"}) == DocumentType.INVOICE
+    assert infer_kind({"ordered_quantity", "unit_price"}) == DocumentType.PURCHASE_ORDER
+    # Nothing distinctive, or signs of two kinds at once: don't guess.
+    assert infer_kind({"order_reference", "total_amount"}) == DocumentType.OTHER
+    assert infer_kind({"ordered_quantity", "invoiced_quantity"}) == DocumentType.OTHER
+
+
+def test_a_delivery_notes_own_date_counts_as_the_delivery_date() -> None:
+    """Readers often report a delivery note's date as document_date."""
+    from decimal import Decimal
+
+    from app.pipeline.claims.schema import DocumentType
+    from app.pipeline.rules.engine import Doc, Fact, Order, delivery_date_window
+
+    def doc(evidence: str, kind: DocumentType, field: str, value: str) -> Doc:
+        return Doc(
+            evidence,
+            f"{evidence}.pdf",
+            kind,
+            [Fact(f"c_{evidence}", evidence, f"{evidence}.pdf", field, value)],
+        )
+
+    po = doc("po", DocumentType.PURCHASE_ORDER, "promised_delivery_date", "2026-10-05")
+    note = doc("dn", DocumentType.DELIVERY_NOTE, "document_date", "2026-10-08")
+    [finding] = delivery_date_window(Order(po, deliveries=[note]), Decimal(0))
+    assert finding.difference == {"value": "3", "unit": "days"}

@@ -142,7 +142,12 @@ class Settings(BaseSettings):
     secrets_key: str = ""
 
     # Browser origins allowed to call the API (the Flutter web app).
-    cors_origins: list[str] = ["https://pruflo.web.app", "https://pruflo.firebaseapp.com"]
+    cors_origins: list[str] = [
+        "https://pruflo.web.app",
+        "https://pruflo.firebaseapp.com",
+        "https://undercurrent-cb9f8.web.app",
+        "https://undercurrent-cb9f8.firebaseapp.com",
+    ]
 
     # Local only: accept "Bearer dev:<uid>:<email>" in place of a Firebase token.
     # Refused outside local and test environments (see app.auth.firebase).

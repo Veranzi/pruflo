@@ -34,6 +34,7 @@ ALL_SECTIONS: tuple[Section, ...] = ("evidence", "timeline", "findings", "recomm
 
 class ReportIn(BaseModel):
     type: report_service.ReportType = "detailed"
+    format: report_service.DocumentFormat = "pdf"
     sections: list[Section] = Field(default_factory=lambda: list(ALL_SECTIONS), max_length=4)
 
 
@@ -77,9 +78,11 @@ def create_report(
     db: Session = Depends(get_db),
     queue: Queue = Depends(get_queue),
 ) -> ReportOut:
-    """17: queue a PDF report. Poll the list (18) until its status is ready."""
+    """17: queue a PDF or Word report. Poll the list (18) until it's ready."""
     case = load_case(db, principal, case_id)
-    report = report_service.request_report(db, principal, case, body.type, list(body.sections))
+    report = report_service.request_report(
+        db, principal, case, body.type, list(body.sections), body.format
+    )
     db.commit()
     db.refresh(report)
     background.add_task(queue.kick)
@@ -119,19 +122,28 @@ def list_reports(
 def download_url(
     case_id: str,
     report_id: str,
+    disposition: Literal["attachment", "inline"] = Query(default="attachment"),
     principal: Principal = EXPORT,
     db: Session = Depends(get_db),
     storage: Storage = Depends(get_storage),
 ) -> DownloadOut:
-    """19: a short-lived link to the PDF."""
+    """19: a short-lived link to the file. ``inline`` opens it in the browser
+    (a preview, for PDFs); ``attachment`` downloads it."""
     case = load_case(db, principal, case_id)
     report = db.get(Report, report_id)
     if report is None or report.case_id != case.id:
         raise not_found("Report")
     if report.status != ReportStatus.READY or not report.object_key:
         raise ApiError(409, "report_not_ready", "This report isn't ready yet.")
-    signed = storage.view_url(report.object_key, f"{report.title}.pdf", "application/pdf")
-    audit.record(db, principal, "report.downloaded", "report", report.id, case_id=case.id)
+    extension, media_type = report_service.REPORT_FILES[ReportFormat(report.format)]
+    signed = storage.view_url(
+        report.object_key,
+        f"{report.title}.{extension}",
+        media_type,
+        inline=disposition == "inline",
+    )
+    action = "report.previewed" if disposition == "inline" else "report.downloaded"
+    audit.record(db, principal, action, "report", report.id, case_id=case.id)
     db.commit()
     return DownloadOut(url=signed.url, expires_at=signed.expires_at)
 

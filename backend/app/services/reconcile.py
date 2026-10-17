@@ -73,6 +73,8 @@ def documents(db: Session, case_id: str) -> list[Doc]:
             ),
             DocumentType.OTHER,
         )
+        if kind == DocumentType.OTHER:
+            kind = infer_kind({c.field_name for c, _ in claims})
         doc = Doc(evidence_id, claims[0][1], kind)
         for claim, name in claims:
             doc.facts.append(
@@ -89,6 +91,21 @@ def documents(db: Session, case_id: str) -> list[Doc]:
             )
         docs.append(doc)
     return docs
+
+
+# Fields only one kind of document states. Used when the reader didn't
+# report document_type (a model can leave it out even when asked).
+_KIND_FIELDS = (
+    (DocumentType.DELIVERY_NOTE, {"delivered_quantity", "delivery_date"}),
+    (DocumentType.INVOICE, {"invoiced_quantity"}),
+    (DocumentType.PURCHASE_ORDER, {"ordered_quantity", "promised_delivery_date"}),
+)
+
+
+def infer_kind(fields: set[str]) -> DocumentType:
+    """The document's kind from the fields found in it, if exactly one kind fits."""
+    kinds = [kind for kind, markers in _KIND_FIELDS if fields & markers]
+    return kinds[0] if len(kinds) == 1 else DocumentType.OTHER
 
 
 def _rewrite(db: Session, tenant_id: str, proposed: Proposed) -> tuple[str, str]:

@@ -215,12 +215,13 @@ def _retryable(db: Session, evidence_id: str, job_id: str, code: str) -> None:
 
 
 def run_report_job(db: Session, storage: Storage, report_id: str) -> str:
-    """Render a queued report to PDF and store it. Idempotent: ready reports are skipped."""
+    """Render a queued report (PDF or Word) and store it. Idempotent: ready
+    reports are skipped."""
     from hashlib import sha256
 
     from app.db.models import Case, Report
-    from app.enums import ReportStatus
-    from app.reports.pdf import render
+    from app.enums import ReportFormat, ReportStatus
+    from app.reports import docx, pdf
     from app.services import reports as report_service
 
     report = db.scalar(
@@ -237,16 +238,18 @@ def run_report_job(db: Session, storage: Storage, report_id: str) -> str:
             .where(EvidenceFile.case_id == case.id, EvidenceFile.status != EvidenceStatus.UPLOADING)
             .order_by(EvidenceFile.created_at)
         ).all()
-        pdf = render(
+        render = docx.render if report.format == ReportFormat.DOCX else pdf.render
+        extension, media_type = report_service.REPORT_FILES[ReportFormat(report.format)]
+        data = render(
             case,
             report.options,
             list(evidence),
             report_service.export_data(db, case),
             report_service.timeline(db, case),
         )
-        key = f"tenants/{case.tenant_id}/cases/{case.id}/reports/{report.id}.pdf"
+        key = f"tenants/{case.tenant_id}/cases/{case.id}/reports/{report.id}.{extension}"
         try:
-            storage.write(key, pdf, "application/pdf")
+            storage.write(key, data, media_type)
         except Exception as exc:
             raise TransientError("storage_unavailable", str(exc)) from exc
     except TransientError:
@@ -262,7 +265,7 @@ def run_report_job(db: Session, storage: Storage, report_id: str) -> str:
             db.commit()
         return "failed"
     report.object_key = key
-    report.sha256 = sha256(pdf).hexdigest()
+    report.sha256 = sha256(data).hexdigest()
     report.status = ReportStatus.READY
     report.completed_at = datetime.now(UTC)
     audit.record_system(

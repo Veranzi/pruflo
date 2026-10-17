@@ -136,6 +136,28 @@ void main() {
     expect(find.text('Export Findings Data'), findsNothing);
   });
 
+  testWidgets('reports can be generated as Word and previewed as PDF',
+      (tester) async {
+    final api = await _signedIn(tester, FakeApi(role: 'reviewer'));
+    await _open(tester, '/reports');
+
+    // The ready PDF report can be previewed and downloaded.
+    expect(find.byTooltip('Preview'), findsOneWidget);
+    expect(find.byTooltip('Download PDF'), findsOneWidget);
+
+    // The button says which format it makes.
+    expect(find.text('Generate PDF Report'), findsOneWidget);
+    await tester.tap(find.text('Word'));
+    await tester.pump();
+    expect(find.text('Generate Word Report'), findsOneWidget);
+    await tester.tap(find.text('Generate Word Report'));
+    await _settle(tester);
+
+    final sent = api.sent('POST', '/reports');
+    expect(sent, hasLength(1));
+    expect(jsonDecode(sent.single.body)['format'], 'docx');
+  });
+
   testWidgets('document sources are shown as coming soon', (tester) async {
     await _signedIn(tester, FakeApi());
     await _open(tester, '/integrations');

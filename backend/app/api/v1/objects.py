@@ -13,7 +13,13 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse
 
 from app.errors import ApiError, forbidden, not_found
-from app.storage.backend import LocalStorage, SignedLinks, Storage, get_storage
+from app.storage.backend import (
+    LocalStorage,
+    SignedLinks,
+    Storage,
+    attachment_extra,
+    get_storage,
+)
 
 router = APIRouter(prefix="/objects", include_in_schema=False)
 
@@ -55,22 +61,32 @@ async def put_object(
 
 @router.get("/{key:path}", response_model=None)
 def get_object(
-    key: str, expires: int, sig: str, storage: Storage = Depends(get_storage)
+    key: str,
+    expires: int,
+    sig: str,
+    dl: str | None = None,
+    storage: Storage = Depends(get_storage),
 ) -> Response:
     links = _signed(storage)
-    if not links.verify("GET", key, expires, sig):
+    extra = attachment_extra(dl) if dl is not None else ""
+    if not links.verify("GET", key, expires, sig, extra):
         raise forbidden("Invalid or expired link.")
     info = links.stat(key)
     if info is None:
         raise not_found()
+    name = dl if dl is not None else key.rsplit("/", 1)[-1]
+    disposition = f"{'attachment' if dl is not None else 'inline'}; filename*=UTF-8''{quote(name)}"
     if isinstance(links, LocalStorage):
-        return FileResponse(links.path(key), media_type=info.content_type)
-    name = key.rsplit("/", 1)[-1]
+        return FileResponse(
+            links.path(key),
+            media_type=info.content_type,
+            headers={"Content-Disposition": disposition},
+        )
     return Response(
         links.read(key),
         media_type=info.content_type or "application/octet-stream",
         headers={
-            "Content-Disposition": f"inline; filename*=UTF-8''{quote(name)}",
+            "Content-Disposition": disposition,
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
