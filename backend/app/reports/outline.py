@@ -11,6 +11,7 @@ Report types:
 """
 
 from collections import Counter
+from pathlib import Path
 from typing import Any, Protocol
 
 from app.db.models import AuditEvent, Case, EvidenceFile, User
@@ -20,6 +21,17 @@ DISCLAIMER = (
     "They are not conclusions: each one needs human interpretation, and only decisions "
     "recorded by a named reviewer are final."
 )
+
+
+# Branding on every page of both formats.
+LOGO = Path(__file__).parent / "assets" / "pruflo_mark.png"
+BRAND = "PruFlo"
+NAVY = (10, 26, 63)
+BLUE = (22, 82, 240)
+
+
+def header_text(case: Case) -> str:
+    return f"Case report · {case.reference}"
 
 
 class Writer(Protocol):

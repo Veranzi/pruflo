@@ -95,7 +95,12 @@ def test_word_report_has_the_same_content(client: TestClient, make: Factory) -> 
     )
     assert file.headers["content-disposition"].startswith("attachment;")
     assert ".docx" in file.headers["content-disposition"]
-    text = "\n".join(p.text for p in Document(io.BytesIO(file.content)).paragraphs)
+    document = Document(io.BytesIO(file.content))
+    text = "\n".join(p.text for p in document.paragraphs)
+    header = document.sections[0].header.paragraphs[0]
+    assert "PruFlo" in header.text and case.reference in header.text
+    assert header._p.xpath(".//pic:pic")  # the logo
+    assert "page" in document.sections[0].footer.paragraphs[0].text
     for expected in (case.reference, "Quantity shortfall", "reject by Rita Reviewer", "Timeline"):
         assert expected in text, expected
 
