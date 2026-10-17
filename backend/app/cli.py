@@ -17,7 +17,7 @@ cleared, because the append-only audit trail refers to it:
 Set up the separate migration and runtime database roles (run as a database
 admin; passwords come from the environment, never the command line):
 
-    PRUFLO_ADMIN_DATABASE_URL=postgresql+psycopg://postgres:...@host/pruflo \
+    PRUFLO_ADMIN_DATABASE_URL=postgresql://postgres:...@host/pruflo \
     PRUFLO_MIGRATOR_PASSWORD=... PRUFLO_RUNTIME_PASSWORD=... \
         python -m app.cli db-roles
 
@@ -40,7 +40,7 @@ import os
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import _psycopg, get_settings
 from app.db.models import ProviderSettings, Tenant, User
 from app.db.roles import apply_roles
 from app.db.session import get_engine
@@ -94,7 +94,7 @@ def test_push(db: Session, email: str) -> str:
 
 
 def db_roles(admin_url: str, migrator: str, runtime: str, create: bool) -> None:
-    engine = create_engine(admin_url)
+    engine = create_engine(_psycopg(admin_url))
     try:
         with engine.begin() as conn:
             apply_roles(
