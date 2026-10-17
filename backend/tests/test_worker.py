@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.models import (
     AuditEvent,
+    Case,
     DocumentPage,
     EvidenceFile,
     OutboxEvent,
@@ -328,3 +329,95 @@ def test_drain_processes_waiting_files(
         evidence = db.get(EvidenceFile, evidence_id)
         assert evidence is not None and evidence.status == EvidenceStatus.PROCESSED
     assert worker_cli.drain(db) == {}
+
+
+def test_retention_is_off_until_a_period_is_set(
+    make: Factory, db: Session, storage: LocalStorage
+) -> None:
+    from app.services import retention
+
+    assert retention.run(db, storage) == {"reports": 0, "evidence": 0}
+
+
+def test_retention_deletes_old_files_but_keeps_the_record(
+    make: Factory, db: Session, storage: LocalStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models import AuditEvent, DocumentPage, Report
+    from app.enums import CaseStatus
+    from app.ids import new_id
+    from app.services import retention
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "evidence_retention_days", 30)
+    monkeypatch.setattr(settings, "report_retention_days", 30)
+    person = make.person()
+    old_case = make.case(person.tenant, person)
+    new_case = make.case(person.tenant, person)
+    old_case.status = new_case.status = CaseStatus.COMPLETED
+    old = make.evidence(old_case)
+    fresh = make.evidence(new_case)
+    for evidence in (old, fresh):
+        storage.write(evidence.object_key, b"%PDF-1.4", "application/pdf")
+        db.add(
+            DocumentPage(
+                id=new_id("pg"),
+                evidence_id=evidence.id,
+                page_index=1,
+                text="x",
+                parser="pdf_text",
+                parser_version="1",
+            )
+        )
+    report = Report(
+        id=new_id("rep"),
+        tenant_id=person.tenant.id,
+        case_id=old_case.id,
+        format="pdf",
+        status="ready",
+        template_version="1",
+        title="Summary",
+        object_key="tenants/x/report.pdf",
+    )
+    db.add(report)
+    db.commit()
+    storage.write("tenants/x/report.pdf", b"%PDF", "application/pdf")
+    later = datetime.now(UTC) + timedelta(days=31)
+    db.execute(Case.__table__.update().where(Case.id == new_case.id).values(updated_at=later))
+    db.commit()
+
+    assert retention.purge_evidence(db, storage, now=later) == 1
+    assert retention.purge_reports(db, storage, now=later) == 1
+    db.refresh(old)
+    db.refresh(fresh)
+    assert old.purged_at is not None and storage.stat(old.object_key) is None
+    assert db.scalar(select(DocumentPage).where(DocumentPage.evidence_id == old.id)) is None
+    assert fresh.purged_at is None and storage.stat(fresh.object_key) is not None
+    assert db.get(Report, report.id) is None and storage.stat("tenants/x/report.pdf") is None
+    assert db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == "evidence.purged", AuditEvent.target_id == old.id
+        )
+    )
+
+
+def test_tick_runs_scheduled_work_with_its_token(
+    client: TestClient, make: Factory, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = get_settings()
+    assert client.post("/v1/internal/tick").status_code == 404  # off without a token
+    monkeypatch.setattr(settings, "tick_token", "tick-secret-123")
+    assert client.post("/v1/internal/tick").status_code == 401
+    bad = client.post("/v1/internal/tick", headers={"X-Pruflo-Tick-Token": "wrong"})
+    assert bad.status_code == 401
+    alice = make.person(Role.INVESTIGATOR)
+    case = make.case(alice.tenant, alice)
+    evidence = make.evidence(case)
+    evidence.status = EvidenceStatus.FAILED_RETRYABLE
+    db.commit()
+    res = client.post("/v1/internal/tick", headers={"X-Pruflo-Tick-Token": "tick-secret-123"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert {"processing", "connectors", "retention", "notifications_removed"} <= set(body)
+    assert "failed" not in body.values()

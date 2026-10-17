@@ -14,7 +14,7 @@ from app.auth.principal import Principal, load_case, require
 from app.db.models import Case, DocumentPage, EvidenceFile, TextBlock
 from app.db.session import get_db
 from app.enums import EvidenceStatus
-from app.errors import not_found
+from app.errors import ApiError, not_found
 from app.pagination import Page, after_cursor, clamp_limit, next_cursor_for
 from app.services import evidence as evidence_service
 from app.storage.backend import Storage, get_storage
@@ -189,6 +189,8 @@ def view_url(
     evidence = _load_evidence(db, case, evidence_id)
     if evidence.status == EvidenceStatus.UPLOADING:
         raise not_found("Evidence")
+    if evidence.purged_at is not None:
+        raise ApiError(410, "evidence_purged", "This file was deleted under the retention policy.")
     signed = storage.view_url(
         evidence.object_key,
         evidence.original_filename,

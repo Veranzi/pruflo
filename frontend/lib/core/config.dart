@@ -17,14 +17,9 @@ class AppConfig {
   static const _firebaseAppId = String.fromEnvironment('FIREBASE_APP_ID');
   static const _firebaseSenderId =
       String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-  static const _firebaseProjectId = String.fromEnvironment(
-    'FIREBASE_PROJECT_ID',
-    defaultValue: 'login-register-125ef',
-  );
-  static const _firebaseAuthDomain = String.fromEnvironment(
-    'FIREBASE_AUTH_DOMAIN',
-    defaultValue: 'login-register-125ef.firebaseapp.com',
-  );
+  static const _firebaseProjectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
+  // Defaults to the project's own <projectId>.firebaseapp.com.
+  static const _firebaseAuthDomain = String.fromEnvironment('FIREBASE_AUTH_DOMAIN');
 
   /// reCAPTCHA v3 site key for Firebase App Check. When set, every API call
   /// carries an App Check token (X-Firebase-AppCheck), which the API requires
@@ -40,15 +35,18 @@ class AppConfig {
 
   /// Without a Firebase API key the app uses development sign-in, which the
   /// API accepts only when it runs with PRUFLO_ENV=local.
-  static bool get firebaseConfigured => _firebaseApiKey.isNotEmpty;
+  static bool get firebaseConfigured =>
+      _firebaseApiKey.isNotEmpty && _firebaseProjectId.isNotEmpty;
 
   static bool get pushConfigured => firebaseConfigured && vapidKey.isNotEmpty;
 
-  static FirebaseOptions get firebaseOptions => const FirebaseOptions(
+  static FirebaseOptions get firebaseOptions => FirebaseOptions(
         apiKey: _firebaseApiKey,
         appId: _firebaseAppId,
         messagingSenderId: _firebaseSenderId,
         projectId: _firebaseProjectId,
-        authDomain: _firebaseAuthDomain,
+        authDomain: _firebaseAuthDomain.isNotEmpty
+            ? _firebaseAuthDomain
+            : '$_firebaseProjectId.firebaseapp.com',
       );
 }

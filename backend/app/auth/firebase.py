@@ -4,9 +4,11 @@ The user's identity always comes from a verified token, never from the
 request body.
 """
 
+import json
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import firebase_admin
@@ -29,12 +31,33 @@ class FirebaseIdentity:
     name: str
 
 
+def service_account_info() -> dict[str, Any] | None:
+    """The Firebase service-account key, from PRUFLO_FIREBASE_CREDENTIALS (the
+    JSON itself, as hosts store secrets) or PRUFLO_FIREBASE_CREDENTIALS_FILE.
+    None on Google Cloud, where the runtime identity is used instead."""
+    settings = get_settings()
+    raw = settings.firebase_credentials
+    if not raw and settings.firebase_credentials_file:
+        raw = Path(settings.firebase_credentials_file).read_text()
+    if not raw:
+        return None
+    info: dict[str, Any] = json.loads(raw)
+    return info
+
+
 @lru_cache
 def _firebase_app() -> firebase_admin.App:
-    # On Cloud Run this uses the service account; no key file is needed.
     settings = get_settings()
     project = settings.firebase_project or settings.gcp_project
-    return firebase_admin.initialize_app(options={"projectId": project})
+    info = service_account_info()
+    if info is None:
+        # On Google Cloud this uses the runtime service account; no key file.
+        return firebase_admin.initialize_app(options={"projectId": project})
+    from firebase_admin import credentials
+
+    return firebase_admin.initialize_app(
+        credentials.Certificate(info), options={"projectId": project or info["project_id"]}
+    )
 
 
 def dev_mode_enabled() -> bool:

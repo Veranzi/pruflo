@@ -68,7 +68,8 @@ def run_processing_job(
     if evidence is None or evidence.status == EvidenceStatus.UPLOADING:
         _finish_job(db, job_id, JobStatus.FAILED_TERMINAL, "evidence_missing")
         return "skipped"
-    log = {"evidence_id": evidence.id, "case_id": evidence.case_id, "job_id": job_id}
+    case_id = evidence.case_id
+    log = {"evidence_id": evidence.id, "case_id": case_id, "job_id": job_id}
     evidence.status = EvidenceStatus.EXTRACTING
     db.commit()
 
@@ -82,11 +83,13 @@ def run_processing_job(
         _finish_job(db, job_id, JobStatus.SUCCEEDED)
         db.commit()
         logger.info("evidence processed", extra=log)
+        _reconcile(db, case_id)
         return "done"
     except PermanentError as exc:
         db.rollback()
         _fail(db, evidence_id, job_id, exc.code)
         logger.warning("evidence failed: %s", exc.code, extra=log)
+        _reconcile(db, case_id)
         return "failed"
     except Exception as exc:
         db.rollback()
@@ -95,10 +98,23 @@ def run_processing_job(
             logger.exception("unexpected processing error", extra=log)
         if attempt >= MAX_ATTEMPTS:
             _fail(db, evidence_id, job_id, code)
+            _reconcile(db, case_id)
             return "failed"
         _retryable(db, evidence_id, job_id, code)
         logger.warning("evidence will be retried (attempt %d): %s", attempt, code, extra=log)
         raise RetryLater(code) from exc
+
+
+def _reconcile(db: Session, case_id: str) -> None:
+    """Run the rules once the case's last file is done. A failure here never
+    fails the file: ``python -m app.worker reconcile`` can run it again."""
+    from app.services.reconcile import reconcile_case
+
+    try:
+        reconcile_case(db, case_id)
+    except Exception:
+        db.rollback()
+        logger.exception("reconciliation failed", extra={"case_id": case_id})
 
 
 def _save(db: Session, evidence: EvidenceFile, result: Extraction) -> None:
@@ -136,18 +152,32 @@ def _save(db: Session, evidence: EvidenceFile, result: Extraction) -> None:
 
     parsers = sorted({f"{p.parser}:{p.parser_version}" for p in result.pages})
     evidence.parser_version = ", ".join(parsers)[:80]
+    # Claims (Steps 9 and 10), in the same transaction as the pages. A model
+    # outage (TransientError) retries the whole job; a refusal keeps the text
+    # and leaves the file for a manual check.
+    from app.services.claims import extract_claims
+
+    claims_error: str | None = None
+    try:
+        claims = extract_claims(db, evidence, result.pages)
+    except PermanentError as exc:
+        claims, claims_error = [], exc.code
     if not result.has_text:
         evidence.status = EvidenceStatus.NEEDS_REVIEW
         evidence.error_class = "ocr_not_configured" if result.unread_pages else "no_text_found"
     elif result.unread_pages:
         evidence.status = EvidenceStatus.NEEDS_REVIEW
         evidence.error_class = "ocr_not_configured"
+    elif claims_error:
+        evidence.status = EvidenceStatus.NEEDS_REVIEW
+        evidence.error_class = claims_error
     else:
         evidence.status = EvidenceStatus.PROCESSED
         evidence.error_class = None
     details = {
         "title": f"Processed {evidence.original_filename}",
         "pages": len(result.pages),
+        "claims": len(claims),
         "status": evidence.status,
         "unread_pages": result.unread_pages[:50],
     }

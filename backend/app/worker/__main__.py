@@ -10,6 +10,16 @@ Import new files from Odoo, Google Drive and SharePoint now, whether or not
 they're due (then drain to process them):
 
     python -m app.worker sync-connectors
+
+Run the rules again for one case, or for every case whose files are all
+processed but that is still awaiting evidence:
+
+    python -m app.worker reconcile [--case case_...]
+
+Delete reports and evidence past their retention periods
+(PRUFLO_REPORT_RETENTION_DAYS, PRUFLO_EVIDENCE_RETENTION_DAYS; 0 keeps them):
+
+    python -m app.worker retention
 """
 
 import argparse
@@ -68,6 +78,9 @@ def drain(db: Session) -> dict[str, int]:
         except RetryLater:
             outcome = "retry_later"
         counts[outcome] = counts.get(outcome, 0) + 1
+    from app.services.reconcile import reconcile_waiting
+
+    reconcile_waiting(db)
     _send_pending_events(db)  # e.g. evidence.processed webhooks from the jobs above
     from app.services import webhooks
 
@@ -81,8 +94,26 @@ def main() -> None:
     sub.add_parser("drain", help="process waiting files now, in this process")
     sub.add_parser("weekly-summary", help="send this week's summaries now")
     sub.add_parser("sync-connectors", help="import new files from document sources now")
+    rec = sub.add_parser("reconcile", help="run the rules for waiting cases (or one case)")
+    rec.add_argument("--case", help="a case ID, e.g. case_...")
+    sub.add_parser("retention", help="delete reports and evidence past retention")
     args = parser.parse_args()
     with Session(get_engine()) as db:
+        if args.command == "retention":
+            from app.services import retention
+
+            print(retention.run(db, get_storage()))  # noqa: T201
+            return
+        if args.command == "reconcile":
+            from app.services.reconcile import reconcile_case, reconcile_waiting
+
+            if args.case:
+                result = reconcile_case(db, args.case, force=True)
+                print(result or f"No case {args.case}.")  # noqa: T201
+            else:
+                print(f"Reconciled {reconcile_waiting(db)} case(s).")  # noqa: T201
+            _send_pending_events(db)
+            return
         if args.command == "sync-connectors":
             from app.connectors.sync import sync_due
 

@@ -140,6 +140,7 @@ class OcrProviderName(StrEnum):
 
 class AiProviderName(StrEnum):
     VERTEX_GEMINI = "vertex_gemini"
+    GEMINI_API = "gemini_api"  # Gemini API with a paid-tier key (AI Studio)
     VERTEX_CLAUDE = "vertex_claude"
     AZURE_OPENAI = "azure_openai"
     SELF_HOSTED = "self_hosted"

@@ -1,0 +1,32 @@
+name: Backend scheduled work
+
+# Calls POST /v1/internal/tick on the API every 30 minutes: retries, missed
+# reconciliations, webhook re-sends, document-source imports, retention and
+# the Monday summary. On Render's free plan it also wakes the service.
+# Needs the API_BASE_URL variable and the PRUFLO_TICK_TOKEN secret.
+# (GitHub runs scheduled workflows from the default branch only.)
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run scheduled work
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          TICK_TOKEN: ${{ secrets.PRUFLO_TICK_TOKEN }}
+        run: |
+          if [ -z "$API_BASE_URL" ] || [ -z "$TICK_TOKEN" ]; then
+            echo "::warning::Set API_BASE_URL and PRUFLO_TICK_TOKEN to enable scheduled work."
+            exit 0
+          fi
+          # A sleeping free instance takes about a minute to wake.
+          curl --fail-with-body --silent --show-error --max-time 480 --retry 2 --retry-delay 30 \
+            -X POST "$API_BASE_URL/v1/internal/tick" -H "X-Pruflo-Tick-Token: $TICK_TOKEN"

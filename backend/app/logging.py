@@ -48,3 +48,5 @@ def configure_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # fontTools (used by fpdf2 for PDF reports) logs every subsetting step.
+    logging.getLogger("fontTools").setLevel(logging.WARNING)

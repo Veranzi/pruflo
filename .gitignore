@@ -6,8 +6,11 @@ Thumbs.db
 
 # Secrets
 .env
+.env.*
+!.env.example
 *.pem
 service-account*.json
+*-service-account*.json
 
 # Tool debug logs (may contain account details)
 firebase-debug.log

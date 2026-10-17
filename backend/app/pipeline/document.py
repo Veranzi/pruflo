@@ -30,6 +30,9 @@ class Block:
     bbox: BBox | None = None
     cell_ref: str | None = None  # e.g. "Sheet1!A7:D7" or "row 7"
     confidence: Decimal | None = None  # OCR only
+    # Table rows (spreadsheets, CSV, Word tables): every cell in column order,
+    # empty ones included, so values line up with their headers. In memory only.
+    cells: list[str] | None = None
     char_start: int = 0
     char_end: int = 0
 

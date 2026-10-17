@@ -38,7 +38,7 @@ def _client() -> TestClient:
 def test_healthz() -> None:
     res = _client().get("/healthz")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    assert res.json() == {"status": "ok", "release": "dev"}
     assert res.headers["X-Request-ID"].startswith("req_")
 
 
@@ -139,3 +139,33 @@ def test_docs_are_hidden_in_production() -> None:
     finally:
         settings.env = original
     assert TestClient(create_app()).get("/openapi.json").status_code == 200
+
+
+def test_readyz_checks_the_database(client: TestClient) -> None:
+    res = client.get("/readyz")
+    assert res.status_code == 200 and res.json()["status"] == "ready"
+
+
+def test_readyz_reports_an_unreachable_database() -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db.session import database_ready
+
+    dead = create_engine(
+        "postgresql+psycopg://x:y@127.0.0.1:1/none", connect_args={"connect_timeout": 1}
+    )
+    with Session(dead) as db:
+        res = database_ready(db)
+    assert getattr(res, "status_code", 200) == 503
+
+
+def test_host_database_urls_get_the_psycopg_driver() -> None:
+    from app.config import Settings
+
+    for given in ("postgres://u:p@h:5432/db", "postgresql://u:p@h:5432/db?sslmode=require"):
+        settings = Settings(database_url=given, migration_database_url=given)
+        assert settings.sqlalchemy_url.startswith("postgresql+psycopg://u:p@h:5432/db")
+        assert settings.migration_url.startswith("postgresql+psycopg://")
+    kept = Settings(database_url="postgresql+psycopg://u:p@h/db")
+    assert kept.sqlalchemy_url == "postgresql+psycopg://u:p@h/db"

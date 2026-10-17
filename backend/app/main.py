@@ -4,12 +4,15 @@
 then apply case-level authorization. See Docs/backend_plan.md.
 """
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
-from app.api.v1 import local_objects
+from app.api.v1 import objects
 from app.api.v1 import router as v1_router
 from app.config import get_settings
+from app.db.session import database_ready, get_db
 from app.errors import install_error_handlers
 from app.logging import configure_logging
 from app.middleware import install_request_middleware
@@ -54,12 +57,17 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+        """Liveness: the process answers. Carries the release (commit) deployed."""
+        return {"status": "ok", "release": get_settings().release}
+
+    @app.get("/readyz", include_in_schema=False, response_model=None)
+    def readyz(db: Session = Depends(get_db)) -> dict[str, str] | JSONResponse:
+        """Readiness (Cloud Run startup probe): the database answers."""
+        return database_ready(db)
 
     app.include_router(v1_router, prefix="/v1")
-    if get_settings().env in ("local", "test"):
-        # Stands in for signed Cloud Storage URLs; never mounted in the cloud.
-        app.include_router(local_objects.router, prefix="/v1")
+    # Signed upload and view links for Firestore and local storage.
+    app.include_router(objects.router, prefix="/v1")
     return app
 
 

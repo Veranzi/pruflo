@@ -1,0 +1,20 @@
+# Render free tier: one container is both the API and the worker.
+# Files are processed in this process right after upload
+# (PRUFLO_QUEUE_BACKEND=inline); scheduled work comes from POST
+# /v1/internal/tick, called by .github/workflows/tick.yml.
+FROM python:3.12-slim
+
+WORKDIR /app
+# Logs reach Render straight away; no .pyc files in the image.
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# DejaVu fonts let PDF reports show any name or currency symbol, not just Latin-1.
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY alembic.ini start-render.sh ./
+COPY app ./app
+RUN useradd --create-home pruflo && chmod +x start-render.sh
+USER pruflo
+
+CMD ["./start-render.sh"]
