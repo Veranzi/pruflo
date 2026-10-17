@@ -26,17 +26,17 @@ Last updated 2026-10-17. Status is judged against each step's **Done when** line
 | 6 Evidence upload | 🟠 | Endpoints 7–11, the Flutter upload screen and outbox publishing; the whole flow runs through the Google client libraries against the GCS and Pub/Sub emulators (CI). Signature and size-range enforcement need the real bucket: `python -m app.cli check-storage` (Step 3) |
 | 7 Worker | ✅ | Idempotent jobs, retries, outbox → Pub/Sub, push endpoint; runs inline locally |
 | 8 Text extraction | 🟠 | PDF, Word, Excel, CSV, TXT and endpoint 12 done; real Document AI OCR needs Step 3 |
-| 9 Gemini extraction | ❌ | Needs Vertex AI in the GCP project |
-| 10 Grounding | ❌ | |
-| 11 Rule engine | ❌ | |
-| 12 Explanations | ❌ | |
-| 13 Human review | ✅ | Endpoints 13–15; case status follows the decisions. Findings appear once Steps 9–11 exist |
+| 9 Claim extraction | 🟠 | Schema checked in code, the structured reader (labelled fields and line-item tables in PDF, Word, Excel, CSV) and the Vertex Gemini adapter (off until `PRUFLO_GEMINI_ENABLED`). Gemini tested against a stand-in only: it needs Vertex AI in the GCP project (Step 3) |
+| 10 Grounding | ✅ | Golden tests for exact, missing, ambiguous, line-wrapped and bare-number quotes; span and box saved on every claim |
+| 11 Rule engine | ✅ | All four templates, reconciliation after processing, case status follows; 100 vs 80 gives 20 in code |
+| 12 Explanations | ✅ | Fixed templates; the optional Gemini rewrite is kept only if its numbers match (`PRUFLO_GEMINI_EXPLANATIONS`) |
+| 13 Human review | ✅ | Endpoints 13–15; case status follows the decisions |
 | 14 Reports and export | ✅ | PDF reports (17–19) and JSON/CSV export (50) |
 | 15 Admin | ✅ | Users, customers, case members, audit log (24–33), all with screens |
 | 16 Integrations | 🟠 | API keys, webhooks, rules, providers and all four importers (email inbox, Odoo, Google Drive, SharePoint) built and tested against fake services. Each source turns on when its settings exist; none has run against the real service yet (needs inbound mail, OAuth apps, an Odoo instance). Admin email for paused webhooks waits for an email service |
 | + Notifications and profile | 🟠 | Notifications with preferences, profile photo, customer picker (51–57) done. Push: the missing web service worker is added and the FCM message passes firebase-admin's encoder; a real send waits for credentials on `login-register-125ef` and a VAPID key (`python -m app.cli test-push`) |
-| 17 Hardening | ❌ | |
-| 18 Case Q&A (optional) | ❌ | |
+| 17 Hardening | 🟠 | Done locally: `/readyz` with a database check, pool budget settings, retention jobs (off until periods are agreed), a load-test tool run at the limits, release on `/healthz`. Monitoring, backups, staging/production and rollback need GCP; the threat model and DPIA need people |
+| 18 Case Q&A (optional) | 🟠 | Endpoint 20 and the Ask tab, with three read-only tools and checked citations; answers need Gemini (503 `assistant_unavailable` until then) |
 
 Built along the way, not in the original steps:
 
@@ -289,7 +289,10 @@ Set this up early so that each later step can be deployed and shown:
 - Record the parser or processor name and version on every page.
 - **Endpoint:** 12 anchors (page text and boxes for the review overlay).
 
-## ❌ Step 9: claim extraction with Gemini
+## 🟠 Step 9: claim extraction with Gemini
+
+> **Status:** `app/pipeline/claims/`. The schema (`claims-1`) is checked in code: field names and document types from fixed lists, numbers, dates (day first) and currencies parsed by code, lengths capped. Two extractors: **Vertex Gemini** (`vertex_gemini`, strict JSON response schema, no tools, the tenant's model and region) when `PRUFLO_GEMINI_ENABLED` is on, and otherwise a **structured reader** that takes document type, labelled fields and line-item tables from PDF, Word, Excel and CSV without a model. Every claim records provider, model, prompt, schema, OCR version and region. **Left:** Gemini has only run against a stand-in; it needs Vertex AI in the GCP project (Step 3). Free-form layouts the structured reader can't read wait for Gemini.
+
 
 - Define the `ClaimExtractor` interface and the **Vertex Gemini** adapter, with the model ID read from configuration and checked against an allowlist.
 - Send only the text that's needed. Give Gemini a strict JSON schema to fill: `field_name, raw_value, normalized_value, source_quote, page_hint, extraction_status`, plus a reason when it can't find a value.
@@ -297,7 +300,10 @@ Set this up early so that each later step can be deployed and shown:
 - Save the model, prompt version, schema version, provider and region on every claim.
 - **Endpoint:** 13 claims.
 
-## ❌ Step 10: grounding
+## ✅ Step 10: grounding
+
+> **Status:** done (`app/pipeline/grounding.py`). Quotes are matched on the page text, ignoring only whitespace and line wraps; one match is `grounded` with span and box, several `ambiguous`, none (or a quote without the value) `ungrounded`, and a bare number with no label `ambiguous`. Table claims quote the whole row. Only grounded claims reach the rules.
+
 
 - Search for each quote in the page (or sheet) text it claims to come from first, normalizing only whitespace and line-wrap differences.
 - One match makes the claim `grounded`, with the span and bounding box attached. Several matches make it `ambiguous`, and no match makes it `ungrounded`; either way it goes to `needs_review`.
@@ -305,7 +311,10 @@ Set this up early so that each later step can be deployed and shown:
 
 **Done when:** golden tests pass for exact, missing and ambiguous quotes.
 
-## ❌ Step 11: rule engine
+## ✅ Step 11: rule engine
+
+> **Status:** done. `app/pipeline/rules/engine.py` (pure, Decimal arithmetic) and `app/services/reconcile.py`. Documents are grouped by purchase order (by reference, or the only order in the case); different units or currencies give a `data_quality` finding instead of a comparison. Reconciliation runs when a case's last file finishes, with the case row locked; unreviewed findings the rules no longer produce are removed, reviewed ones stay. The case then moves to `in_review` or `completed`. `/tasks/reconcile` and `python -m app.worker reconcile` catch anything missed.
+
 
 - Write the four templates from the contract as versioned Python rules with declared inputs, units and parameters: `quantity_shortfall`, `amount_mismatch`, `delivery_date_window` and `missing_document`.
 - Incompatible units or currencies produce a data-quality issue, never a silent conversion. `missing_document` reports "no matching evidence found", which is not the same as proof that the delivery never happened.
@@ -314,7 +323,10 @@ Set this up early so that each later step can be deployed and shown:
 
 **Done when:** ordered=100 and delivered=80 gives a shortfall of 20, with no LLM involved.
 
-## ❌ Step 12: explanations
+## ✅ Step 12: explanations
+
+> **Status:** done (`app/pipeline/rules/explain.py`). The optional Gemini rewrite (`PRUFLO_GEMINI_EXPLANATIONS`) is used only when its numbers match the template's exactly, and is labelled `machine_generated`.
+
 
 - The default is a **deterministic template** ("The purchase order lists 100 units; the delivery note records 80.").
 - An optional Gemini rewrite may use only the finding's own values and quotes. It is labeled `machine_generated`.
@@ -361,7 +373,10 @@ Build in this order (from the contract):
 2. **Connectors**, 43–45: the email inbox first, then Odoo, then Google Drive and SharePoint (OAuth). Imported files go through **the same path and limits** as a manual upload (Step 6). Credentials are never returned.
 3. **Providers**, 48–49: read-only at first, returning the defaults (`google_document_ai`, `vertex_gemini`, `asia-southeast1`). Before saving a change, check that an adapter exists, that the model is on the allowlist and that it's offered in the chosen region.
 
-## ❌ Step 17: production hardening
+## 🟠 Step 17: production hardening
+
+> **Status:** the parts that don't need GCP are done: `/readyz` on the API and worker (database check), pool settings (`PRUFLO_DB_POOL_SIZE`, `PRUFLO_DB_MAX_OVERFLOW`, recycle and connect timeout), the deployed commit on `/healthz` (`PRUFLO_RELEASE`), retention jobs (`/tasks/retention`; evidence files and page text, reports; off until periods are agreed), and `python -m app.loadtest`, run on the local stack at 200 pages and 25 MB. **Left:** monitoring, backups and a restore drill, staging and production, rollback (all GCP); the threat-modelling session and the DPIA (people).
+
 
 - Cloud Monitoring dashboards and alerts for queue age, processing time, worker failures, OCR and model errors, database connections and cost anomalies.
 - Cloud SQL backups kept in-region, plus a restore drill that has actually been run.
@@ -370,7 +385,10 @@ Build in this order (from the contract):
 - Separate staging and production environments, deployments that record the commit and image digest, and a rollback procedure.
 - A data protection impact assessment before any real documents are used.
 
-## ❌ Step 18 (optional): case Q&A
+## 🟠 Step 18 (optional): case Q&A
+
+> **Status:** endpoint 20 (`POST /v1/cases/{caseId}/qa`, `{"question"}` → `{"answer", "citations": [{"type", "id"}], "source": "machine_generated"}`) and the case's Ask tab. Gemini gets `get_findings`, `get_claims` and `get_timeline` for that case only; citations to anything else are dropped and an answer without one is withheld. **Left:** it answers only once Gemini is enabled (until then `503 assistant_unavailable`).
+
 
 Endpoint **20**: a read-only assistant with three narrow tools (`get_findings`, `get_claims`, `get_timeline`). Every answer cites finding or claim IDs. It has no write tools, and the core workflow never depends on it.
 
@@ -380,13 +398,13 @@ Endpoint **20**: a read-only assistant with three narrow tools (`get_findings`, 
 
 | Milestone | Status | Steps | Matches report phase | What you can show |
 | --- | --- | --- | --- | --- |
-| **M1 Vertical slice** | 🟠 | 0–6, 11 (shortfall rule only), 13, 14 (simple PDF) | Phase 1 | Create a case → upload synthetic documents → see the 20-unit shortfall → approve it → export PDF |
+| **M1 Vertical slice** | ✅ | 0–6, 11 (shortfall rule only), 13, 14 (simple PDF) | Phase 1 | Create a case → upload synthetic documents → see the 20-unit shortfall → approve it → export PDF |
 | **M2 Robust ingestion** | 🟠 | 7, 8 | Phase 2 | PDFs, DOCX, XLSX, CSV and scans are all read, with retries and visible statuses |
-| **M3 Grounded AI** | ❌ | 9, 10, 12 | Phase 3 | Values come from Gemini with source highlights; uncertain ones are flagged |
+| **M3 Grounded AI** | 🟠 | 9, 10, 12 | Phase 3 | Values come from Gemini with source highlights; uncertain ones are flagged |
 | **M4 Review and audit** | ✅ | 13 (full), 15, 16 (keys, export, webhooks) | Phase 4 | Corrections, audit trail, admin, integrations |
-| **M5 Hardening** | ❌ | 16 (connectors), 17 | Phase 5 | Monitoring, backups, staging and production |
+| **M5 Hardening** | 🟠 | 16 (connectors), 17 | Phase 5 | Monitoring, backups, staging and production |
 
-M1 is partly done: upload, processing, review and PDF export work end to end locally. Step 3 (GCP) and the shortfall rule (Step 11) are still to build, so no finding appears without test data.
+M1 runs end to end on the local stack (API and worker as separate processes, Pub/Sub emulator, separate database roles): a PDF purchase order, an Excel delivery note and a Word invoice give a 20-unit shortfall, a 9.7% amount mismatch and a 3-day late delivery; a reviewer decides them, the case completes and the PDF report renders. It still needs Step 3 to run in GCP.
 
 For M1, claims can come from hand-labelled synthetic documents, so the demo works before the Gemini step exists.
 
@@ -394,13 +412,13 @@ For M1, claims can come from hand-labelled synthetic documents, so the demo work
 
 Status as of 2026-10-17: ✅ passes in the test suite · 🟠 partly · ❌ needs a step that isn't built.
 
-- ❌ **Arithmetic:** ordered=100 and delivered=80 in the same unit gives a shortfall of 20, computed in code. (rule engine, Step 11)
-- ❌ **Grounding:** a unique quote maps to its page and span; a missing or ambiguous quote is flagged. (Step 10)
+- ✅ **Arithmetic:** ordered=100 and delivered=80 in the same unit gives a shortfall of 20, computed in code.
+- ✅ **Grounding:** a unique quote maps to its page and span; a missing or ambiguous quote is flagged.
 - ✅ **Authorization:** a user who isn't a member can't reach anything in the case, including signed URLs. A viewer can't export, and an API key can't decide.
 - ✅ **Uploads:** wrong type, over 25 MB, over 200 pages, or incomplete uploads are rejected or quarantined.
 - ✅ **Idempotency:** a redelivered message creates no duplicates.
 - ✅ **Review:** every finding starts `pending`; `reject` and `pending` require a note; every decision records the actor, time, decision, note and any correction.
-- 🟠 **Case status:** a case moves `awaiting_evidence → in_review → completed` and back as described in Step 0. (the transitions work; reconciliation, which moves a case into `in_review`, is Step 11)
+- ✅ **Case status:** a case moves `awaiting_evidence → in_review → completed` and back as described in Step 0.
 - ✅ **Reports:** exports include finding IDs, evidence references, review status and generation time.
 - ✅ **Failures:** timeouts are retried within limits and end in a visible failed state.
 - 🟠 **Security:** signed URLs expire, buckets are private, and no secrets or document text appear in logs. (expiry and logs tested; private buckets need Step 3)
