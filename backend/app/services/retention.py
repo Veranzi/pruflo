@@ -15,14 +15,15 @@ Each deletion is audited.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db.models import Case, DocumentPage, EvidenceFile, Report
+from app.db.models import Case, EvidenceFile, Report
 from app.enums import CaseStatus
 from app.services import audit
 from app.storage.backend import Storage
+from app.storage.content import get_content_store
 
 logger = logging.getLogger("pruflo.retention")
 BATCH = 200
@@ -69,7 +70,7 @@ def purge_evidence(db: Session, storage: Storage, now: datetime | None = None) -
     when = now or datetime.now(UTC)
     for evidence, reference in rows:
         storage.delete(evidence.object_key)
-        db.execute(delete(DocumentPage).where(DocumentPage.evidence_id == evidence.id))
+        get_content_store().delete(evidence.id)
         evidence.purged_at = when
         audit.record_system(
             db,

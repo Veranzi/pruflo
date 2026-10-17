@@ -22,6 +22,9 @@ services:
         value: firestore
       - key: PRUFLO_QUEUE_BACKEND
         value: inline
+      # Extracted page text and blocks (unstructured) go to Firestore too.
+      - key: PRUFLO_CONTENT_BACKEND
+        value: firestore
       # The Firebase project (sign-in, push, Firestore); asked for once.
       - key: PRUFLO_FIREBASE_PROJECT
         sync: false

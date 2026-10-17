@@ -6,18 +6,19 @@ Background on *why* it's set up this way is in `Docs/fix_plan.md`. In short: the
 
 | Piece | Service | Notes |
 | --- | --- | --- |
-| Web app | Firebase Hosting, project `undercurrent-cb9f8` (https://pruflo.web.app) | Deployed by GitHub Actions on every merge to `main` |
+| Web app | Firebase Hosting: https://pruflo.web.app (project `login-register-125ef`) and https://undercurrent-cb9f8.web.app | Deployed to both by GitHub Actions on every merge to `main` |
 | Sign-in, push, uploaded files | **A new Firebase project** (Spark plan), which you create in step 1 | Files are stored in **Firestore**, in chunks |
 | API and worker | **Render**, one free web service (`render.yaml`) | Files are processed in the API process right after upload |
 | Scheduled work | GitHub Actions `tick.yml` every 30 min | Retries, imports, retention, Monday summary; also wakes Render |
-| Database | **Supabase** Postgres (free) | Through the session pooler |
+| Structured records | **Cloud SQL for PostgreSQL** (Firebase SQL Connect no-cost trial, 90 days) | Cases, claims, findings, review and audit trail |
+| Unstructured content | **Firestore** | Uploaded files (chunked) and each file's extracted page text and blocks |
 | Reading documents | **Gemini API**, free key | Synthetic demo documents only (see "Data and privacy") |
 
 ## What's done and what's left
 
 **Done, in the code on the `backend` branch** (not yet on `main`; PR #15 merged an earlier state):
 - Everything in `Docs/backend_plan.md`: uploads, extraction, grounding, the four rules, review, reports, export, integrations, notifications and Q&A.
-- The free-tier pieces: Firestore file storage, the Gemini API-key provider, the scheduled-work endpoint, Supabase-safe database roles, and the Render image, blueprint and start script.
+- The free-tier pieces: Firestore file storage, the Gemini API-key provider, the scheduled-work endpoint, the Firestore document-content store, separate migration and runtime database roles, and the Render image, blueprint and start script.
 - 213 backend tests and 54 Flutter tests pass. The Render image was built and started locally: `/healthz` answers, and it runs as a non-root user.
 
 **Left (this guide):** create the accounts, put the secrets in Render and GitHub, run the database setup once, merge to `main`, and check it end to end. No code changes are needed.
@@ -38,13 +39,13 @@ Background on *why* it's set up this way is in `Docs/fix_plan.md`. In short: the
 
 Throughout, **never commit secrets**. Git already ignores `backend/.env*` (except `.env.example`) and `*-service-account*.json`.
 
-## 1. New Firebase project (about 15 minutes)
+## 1. Firebase project (about 15 minutes)
 
 In https://console.firebase.google.com with the new Google account:
 
-1. **Create the project:** "Create a project" → name it, e.g. `pruflo-app` → turn Google Analytics **off** → Create.
-   - Write down the **project ID** (under the name, e.g. `pruflo-app-1a2b3`). It's called `<PROJECT_ID>` below.
-   - It stays on the free **Spark** plan; don't upgrade.
+1. **The project:** use the existing **Pruflo** project, ID **`login-register-125ef`** (the account's project quota is used up, so no new project). It's called `<PROJECT_ID>` below.
+   - It stays on the free **Spark** plan.
+   - Its Firestore already holds `users` and `conversations` collections from an earlier app. PruFlo only uses `pruflo_objects` and `pruflo_documents`, so they don't clash.
 2. **Register the web app:** ⚙ Project settings → General → "Your apps" → **Web** (`</>`) → nickname `pruflo-web`, leave "Firebase Hosting" **unticked** → Register.
    - Copy these five values from the `firebaseConfig` shown: `apiKey`, `authDomain`, `projectId`, `messagingSenderId`, `appId`.
    - They're public by design (the API enforces access), and they go into GitHub in step 6.
@@ -69,26 +70,26 @@ In https://console.firebase.google.com with the new Google account:
    - Save the file as `backend/firebase-service-account.json`.
    - The backend uses it to verify sign-ins, send push and read and write Firestore. Treat it like a password; if it leaks, delete it on the same page and generate a new one.
 
-## 2. Supabase database (about 10 minutes)
+## 2. Cloud SQL for PostgreSQL, through Firebase SQL Connect (about 15 minutes)
 
-In https://supabase.com (sign up with GitHub; no card):
+Structured records (cases, evidence metadata, claims, findings, review actions, audit) live in Google's **Cloud SQL for PostgreSQL**. Firebase SQL Connect (formerly Data Connect) gives a Spark project one **no-cost Cloud SQL instance for 90 days, with no billing account or card**: PostgreSQL 17, 1 vCPU, ~628 MB memory, 10 GB storage, about 8,000 operations a day. Unstructured content (uploaded files, and each file's extracted page text and blocks) lives in Firestore (step 1.3).
 
-1. **New project:**
-   - name `pruflo`
-   - region **East US (North Virginia)**, next to Render's Virginia region
-   - click "Generate a password" and **save it in a password manager**
-   - plan Free → Create
-2. **Turn off the Data API:** Project Settings → **Data API** → turn it off, or remove `public` from "Exposed schemas" → Save.
-   - **This matters:** otherwise Supabase publishes the tables in `public` over REST to anyone with the project's public key.
-   - The roles step below also revokes those privileges, but switch it off anyway.
-3. **Connection string:** top bar → **Connect** → "Connection string" → method **Session pooler** (not "Direct": free direct connections are IPv6-only and Render can't reach them).
-   - It looks like this. Put your password in place of `[YOUR-PASSWORD]`:
+1. **Create the instance:** Firebase console → the Pruflo project → **SQL Connect** → Get started → choose the **no-cost trial** instance.
+   - Region: **`us-east4` (Northern Virginia)**, next to Render's Virginia region and Firestore `nam5`.
+   - Accept the default service and database names; the wizard's own schema isn't used by PruFlo.
+2. **Open it in Google Cloud:** the same page links to the instance ("View in Google Cloud"), or go to https://console.cloud.google.com/sql with the same Google account and pick project `login-register-125ef`. Then:
+   - **Databases → Create database** → name `pruflo`. PruFlo uses its own database so it never touches SQL Connect's schema.
+   - **Users →** user `postgres` → **Change password** → generate a strong one and **save it in a password manager**. It's called `<POSTGRES_PASSWORD>` below.
+   - **Connections → Networking:** under **Public IP → Authorized networks**, add your own IP (for step 4) and **Render's outbound IPs** (Render dashboard → your service → **Connect → Outbound**; add each range). Never add `0.0.0.0/0`.
+   - **Connections → Security:** set SSL mode to **Allow only SSL connections**.
+   - Copy the instance's **Public IP address** from Overview. It's called `<SQL_IP>` below.
+3. **Connection string** (the backend adds the driver name itself):
 
-     ```
-     postgresql://postgres.<REF>:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:5432/postgres
-     ```
-   - `<REF>` is the project reference (also in the project URL). Add `?sslmode=require` to the end.
-   - (The backend accepts `postgresql://` as is; it adds the driver name itself.)
+   ```
+   postgresql://postgres:<POSTGRES_PASSWORD>@<SQL_IP>:5432/pruflo?sslmode=require
+   ```
+
+**If the trial blocks a step** (for example, authorized networks or creating a database): note what the console says. Enabling billing on the project lifts the limits and keeps the trial's 90 free days.
 
 ## 3. Gemini API key (2 minutes)
 
@@ -111,13 +112,12 @@ PruFlo uses two database roles (`Docs/backend_plan.md`, Step 2):
 2. **Create `backend/.env.deploy`** (git-ignored) with your values:
 
    ```bash
-   # Supabase, as postgres (from step 2.3)
-   ADMIN_URL='postgresql://postgres.<REF>:<SUPABASE_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require'
+   # Cloud SQL, as postgres (from step 2.3)
+   ADMIN_URL='postgresql://postgres:<POSTGRES_PASSWORD>@<SQL_IP>:5432/pruflo?sslmode=require'
    MIGRATOR_PASSWORD='<first password>'
    RUNTIME_PASSWORD='<second password>'
-   # Through the pooler, other roles log in as <role>.<REF>:
-   MIGRATION_URL='postgresql://pruflo_migrator.<REF>:<first password>@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require'
-   APP_URL='postgresql://pruflo_app.<REF>:<second password>@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require'
+   MIGRATION_URL='postgresql://pruflo_migrator:<first password>@<SQL_IP>:5432/pruflo?sslmode=require'
+   APP_URL='postgresql://pruflo_app:<second password>@<SQL_IP>:5432/pruflo?sslmode=require'
    ```
 
 3. **Create the roles, run the migrations, and check** (in `backend/`, with the virtualenv active):
@@ -125,7 +125,7 @@ PruFlo uses two database roles (`Docs/backend_plan.md`, Step 2):
    ```bash
    set -a; source .env.deploy; set +a
 
-   # Create both roles (run as Supabase's postgres user).
+   # Create both roles (run as Cloud SQL's postgres user).
    PRUFLO_ADMIN_DATABASE_URL="$ADMIN_URL" PRUFLO_MIGRATOR_PASSWORD="$MIGRATOR_PASSWORD" \
      PRUFLO_RUNTIME_PASSWORD="$RUNTIME_PASSWORD" python -m app.cli db-roles
 
@@ -136,7 +136,7 @@ PruFlo uses two database roles (`Docs/backend_plan.md`, Step 2):
    PRUFLO_ADMIN_DATABASE_URL="$ADMIN_URL" python -m app.cli db-roles --no-create
    ```
 
-   You should see `Roles ready: ...` twice, and Alembic should end with `Running upgrade 0007 -> 0008, gemini api provider`.
+   You should see `Roles ready: ...` twice, and Alembic should end with `Running upgrade 0008 -> 0009, document content in firestore`.
 
 4. **Check the app's role can connect:**
 
@@ -147,8 +147,8 @@ PruFlo uses two database roles (`Docs/backend_plan.md`, Step 2):
    It prints `0`.
 
 **If a step fails:**
-- `password authentication failed for user "pruflo_app.<REF>"`: wait a minute (the pooler picks up new roles shortly) and try again. Also check that the username has the `.<REF>` part.
-- `permission denied to create role`: your Supabase project doesn't allow it. **Fallback:** use `ADMIN_URL` for both `MIGRATION_URL` and `APP_URL` below. It works, but without the separate-roles protection; note it as a follow-up.
+- `connection timed out`: your IP (or Render's) isn't in the instance's authorized networks (step 2.2).
+- `permission denied to create role`: create the two users in the Cloud SQL console (**Users → Add user account**, built-in authentication) with the passwords above, then run `db-roles --no-create`. If that isn't possible either: **Fallback:** use `ADMIN_URL` for both `MIGRATION_URL` and `APP_URL` below. It works, but without the separate-roles protection; note it as a follow-up.
 
 ## 5. Render (about 15 minutes, plus the first build)
 
@@ -308,18 +308,17 @@ If all of that works, the deployment is done.
 
 - **Render:** 512 MB RAM and 0.1 CPU. It sleeps after 15 idle minutes (about a minute to wake), and a 200-page PDF takes minutes.
 - **Firestore:** 1 GiB stored, 20,000 writes and 50,000 reads a day. A 25 MB file uses ~37 writes, so about 40 files at the maximum size fill the storage.
-- **Supabase:** 500 MB database, and no point-in-time backups. Before a demo, take a copy:
+- **Cloud SQL trial:** about 8,000 operations a day and 10 GB. After 90 days the instance is suspended (30-day grace) unless billing is enabled. Before a demo, take a copy:
 
   ```bash
   pg_dump "$ADMIN_URL" --no-owner -Fc -f pruflo-$(date +%F).dump
   ```
 
-  A project pauses after 7 days without database requests; the 30-minute tick prevents that.
 - **Gemini free tier:** rate limits apply; heavy use returns 429 and the file is retried by the next tick.
 
 ## Data and privacy
 
-- **Location:** data is stored in the **United States** (Render Virginia, Supabase East US, Firestore `nam5`). Firebase Auth keeps sign-in records (email, name) with Google.
+- **Location:** data is stored in the **United States** (Render Virginia, Cloud SQL `us-east4`, Firestore `nam5`). Firebase Auth keeps sign-in records (email, name) with Google.
 - **Gemini free tier:** Google may use free-tier prompts to improve its products and have people review them. **Upload only synthetic documents** (like the demo set) while the key is a free one. A paid-tier key needs a billing account.
 - **Security:** Firestore rules deny all browser access; upload and view links are signed and expire after 10 minutes. The API never returns secrets.
 
@@ -327,5 +326,5 @@ If all of that works, the deployment is done.
 
 1. **App Check:** create a reCAPTCHA v3 site key in the Firebase console, set `FIREBASE_APP_CHECK_SITE_KEY` in GitHub, and set `PRUFLO_APP_CHECK_REQUIRED=true` on Render.
 2. **OCR for scanned documents:** none on this plan (scans end as "needs review"). Options: a paid Gemini tier reading the page images, or Google Cloud Document AI once there's billing.
-3. **Hackathon rule:** the AI Builder Cup asks for a prototype built on Google Cloud. Firebase and Gemini are Google, but Render and Supabase aren't. With credits, switch to Cloud Run + Cloud SQL + Firebase Storage + Vertex Gemini by changing settings (`Docs/fix_plan.md`, "Moving to Google Cloud later"); no code changes are needed.
+3. **Hackathon rule:** the AI Builder Cup asks for a prototype built on Google Cloud. Firebase, Firestore, Cloud SQL and Gemini are Google, but Render isn't. With billing, move the API to Cloud Run (and optionally Firebase Storage + Vertex Gemini) by changing settings (`Docs/fix_plan.md`, "Moving to Google Cloud later"); no code changes are needed.
 4. **Retention periods and an email service** are still open decisions (`Docs/backend_plan.md`, "Open questions").

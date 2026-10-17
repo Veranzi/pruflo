@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.storage.backend import LocalStorage
+from app.storage.content import LocalContent, set_content_store
 from app.worker.queue import InlinePublisher, Queue
 from tests.factories import Factory
 
@@ -75,6 +76,15 @@ def db(connection: Connection) -> Iterator[Session]:
 @pytest.fixture
 def storage(tmp_path: Path) -> LocalStorage:
     return LocalStorage(str(tmp_path / "objects"), "test-signing-key", "http://testserver")
+
+
+@pytest.fixture(autouse=True)
+def content(tmp_path: Path) -> Iterator[LocalContent]:
+    """Extracted page text and blocks (Firestore in production), on disk here."""
+    store = LocalContent(str(tmp_path / "content"))
+    set_content_store(store)
+    yield store
+    set_content_store(None)
 
 
 @pytest.fixture

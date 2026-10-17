@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     storage_backend: Literal["firestore", "local", "gcs"] = "local"
     local_storage_dir: str = ".local-storage"
     firestore_collection: str = "pruflo_objects"
+    # Extracted page text and blocks (unstructured): "firestore", or "local"
+    # (JSON files, local and test only).
+    content_backend: Literal["firestore", "local"] = "local"
+    firestore_content_collection: str = "pruflo_documents"
     # Signs the upload and view links this API hands out (Firestore and local
     # storage). Required outside local and test.
     storage_signing_key: str = Field(
@@ -167,7 +171,7 @@ class Settings(BaseSettings):
 
 
 def _psycopg(url: str) -> str:
-    """Hosts such as Supabase and Render hand out ``postgres://`` or
+    """Hosted Postgres consoles often hand out ``postgres://`` or
     ``postgresql://`` URLs; SQLAlchemy needs the psycopg driver named."""
     for prefix in ("postgres://", "postgresql://"):
         if url.startswith(prefix):

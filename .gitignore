@@ -11,6 +11,8 @@ Thumbs.db
 *.pem
 service-account*.json
 *-service-account*.json
+*-firebase-adminsdk-*.json
+client_secret*.json
 
 # Tool debug logs (may contain account details)
 firebase-debug.log

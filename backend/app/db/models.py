@@ -217,41 +217,6 @@ class ProcessingJob(Timestamped, Base):
     updated_at: Mapped[datetime] = mapped_column(TZ, server_default=func.now(), onupdate=func.now())
 
 
-# Document model -------------------------------------------------------------
-
-
-class DocumentPage(Base):
-    __tablename__ = "document_pages"
-    __table_args__ = (UniqueConstraint("evidence_id", "page_index"),)
-
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    evidence_id: Mapped[str] = mapped_column(_fk("evidence_files.id", "CASCADE"))
-    page_index: Mapped[int] = mapped_column(Integer)  # 1-based; a sheet number for XLSX
-    label: Mapped[str] = mapped_column(String(120), server_default="")  # e.g. sheet name
-    text: Mapped[str] = mapped_column(Text, server_default="")
-    width: Mapped[Decimal | None] = mapped_column(Numeric)
-    height: Mapped[Decimal | None] = mapped_column(Numeric)
-    coordinate_unit: Mapped[str] = mapped_column(String(20), server_default="normalized")
-    parser: Mapped[str] = mapped_column(String(60))
-    parser_version: Mapped[str] = mapped_column(String(80))
-
-
-class TextBlock(Base):
-    __tablename__ = "text_blocks"
-    __table_args__ = (UniqueConstraint("page_id", "block_index"),)
-
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    page_id: Mapped[str] = mapped_column(_fk("document_pages.id", "CASCADE"))
-    evidence_id: Mapped[str] = mapped_column(_fk("evidence_files.id", "CASCADE"), index=True)
-    block_index: Mapped[int] = mapped_column(Integer)
-    text: Mapped[str] = mapped_column(Text)
-    char_start: Mapped[int] = mapped_column(Integer)  # span within document_pages.text
-    char_end: Mapped[int] = mapped_column(Integer)
-    bbox: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # {x0, y0, x1, y1}
-    cell_ref: Mapped[str | None] = mapped_column(String(20))  # spreadsheets, e.g. "B7"
-    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
-
-
 # AI output and results --------------------------------------------------------
 
 

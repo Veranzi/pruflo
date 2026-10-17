@@ -7,6 +7,7 @@ enforces Firestore's 1 MiB document limit so oversized chunks would fail
 here as they would in production.
 """
 
+import json
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -46,7 +47,12 @@ class _Doc:
         return _Snapshot(self, self.store.docs.get(self.path))
 
     def set(self, data: dict[str, Any]) -> None:
-        size = sum(len(v) if isinstance(v, bytes | str) else 8 for v in data.values())
+        size = sum(
+            len(v)
+            if isinstance(v, bytes)
+            else len(json.dumps(v, default=str, ensure_ascii=False).encode())
+            for v in data.values()
+        )
         if size > MIB:
             raise ValueError("Firestore documents are limited to 1 MiB")
         self.store.writes += 1

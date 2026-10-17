@@ -6,18 +6,19 @@ from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.permissions import Permission
 from app.auth.principal import Principal, load_case, require
-from app.db.models import Case, DocumentPage, EvidenceFile, TextBlock
+from app.db.models import Case, EvidenceFile
 from app.db.session import get_db
 from app.enums import EvidenceStatus
 from app.errors import ApiError, not_found
 from app.pagination import Page, after_cursor, clamp_limit, next_cursor_for
 from app.services import evidence as evidence_service
 from app.storage.backend import Storage, get_storage
+from app.storage.content import StoredPage, get_content_store
 from app.worker.queue import Queue, get_queue
 
 router = APIRouter(prefix="/cases/{case_id}/evidence", tags=["evidence"])
@@ -242,45 +243,32 @@ def anchors(
     """12: extracted pages, and one page's text and blocks for source highlighting."""
     case = load_case(db, principal, case_id)
     evidence = _load_evidence(db, case, evidence_id)
-    counts: dict[str, int] = {
-        page_id: count
-        for page_id, count in db.execute(
-            select(TextBlock.page_id, func.count())
-            .where(TextBlock.evidence_id == evidence.id)
-            .group_by(TextBlock.page_id)
-        ).all()
-    }
-    rows = db.scalars(
-        select(DocumentPage)
-        .where(DocumentPage.evidence_id == evidence.id)
-        .order_by(DocumentPage.page_index)
-    ).all()
+    # Page text and blocks are unstructured content, kept in Firestore.
+    content = get_content_store()
+    rows = sorted(content.summaries(evidence.id), key=lambda r: r.index)
 
-    def summary(row: DocumentPage) -> dict[str, object]:
+    def summary(row: StoredPage) -> dict[str, object]:
         return {
-            "index": row.page_index,
+            "index": row.index,
             "label": row.label,
             "width": row.width,
             "height": row.height,
             "parser": row.parser,
-            "block_count": counts.get(row.id, 0),
+            "block_count": row.block_count,
         }
 
     detail = None
     if page is not None:
-        row = next((r for r in rows if r.page_index == page), None)
-        if row is None:
+        found = content.page(evidence.id, page)
+        if found is None:
             raise not_found("Page")
-        blocks = db.scalars(
-            select(TextBlock).where(TextBlock.page_id == row.id).order_by(TextBlock.block_index)
-        ).all()
         detail = PageDetail(
-            **summary(row),
-            text=row.text,
+            **summary(found),
+            text=found.text,
             blocks=[
                 BlockOut(
                     id=b.id,
-                    index=b.block_index,
+                    index=b.index,
                     text=b.text,
                     char_start=b.char_start,
                     char_end=b.char_end,
@@ -288,7 +276,7 @@ def anchors(
                     cell_ref=b.cell_ref,
                     confidence=b.confidence,
                 )
-                for b in blocks
+                for b in sorted(found.blocks, key=lambda b: b.index)
             ],
         )
     return AnchorsOut(
