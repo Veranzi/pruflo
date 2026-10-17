@@ -14,14 +14,13 @@ from app.config import get_settings
 from app.db.models import (
     AuditEvent,
     Case,
-    DocumentPage,
     EvidenceFile,
     OutboxEvent,
     ProcessingJob,
-    TextBlock,
 )
 from app.enums import EvidenceStatus, JobStatus, Role
 from app.storage.backend import LocalStorage
+from app.storage.content import LocalContent, StoredPage
 from app.worker import jobs
 from app.worker.jobs import RetryLater, run_processing_job
 from app.worker.queue import InlinePublisher, Queue, dispatch_outbox
@@ -51,6 +50,14 @@ def _job(db: Session, evidence_id: str) -> ProcessingJob:
     return job
 
 
+def _pages(content: LocalContent, evidence_id: str) -> int:
+    return len(content.summaries(evidence_id))
+
+
+def _blocks(content: LocalContent, evidence_id: str) -> int:
+    return sum(page.block_count for page in content.summaries(evidence_id))
+
+
 def _count(db: Session, model: Any, **where: str) -> int:
     query = select(func.count()).select_from(model)
     for name, value in where.items():
@@ -59,7 +66,7 @@ def _count(db: Session, model: Any, **where: str) -> int:
 
 
 def test_upload_is_processed_and_pages_are_stored(
-    client: TestClient, make: Factory, db: Session
+    client: TestClient, make: Factory, db: Session, content: LocalContent
 ) -> None:
     alice = make.person(Role.INVESTIGATOR)
     case = make.case(alice.tenant, alice)
@@ -71,8 +78,8 @@ def test_upload_is_processed_and_pages_are_stored(
     assert evidence.status == EvidenceStatus.PROCESSED
     assert evidence.parser_version and evidence.parser_version.startswith("pdf_text:pdfplumber")
     assert _job(db, evidence_id).status == JobStatus.SUCCEEDED
-    assert _count(db, DocumentPage, evidence_id=evidence_id) == 2
-    assert _count(db, TextBlock, evidence_id=evidence_id) == 3
+    assert _pages(content, evidence_id) == 2
+    assert _blocks(content, evidence_id) == 3
 
     processing = db.scalar(select(OutboxEvent).where(OutboxEvent.type == "evidence.process"))
     assert processing is not None and processing.published_at is not None
@@ -112,7 +119,12 @@ def test_anchors_endpoint(client: TestClient, make: Factory) -> None:
 
 
 def test_redelivery_is_a_no_op(
-    client: TestClient, make: Factory, db: Session, storage: LocalStorage, manual_queue: Queue
+    client: TestClient,
+    make: Factory,
+    db: Session,
+    storage: LocalStorage,
+    manual_queue: Queue,
+    content: LocalContent,
 ) -> None:
     alice = make.person(Role.INVESTIGATOR)
     case = make.case(alice.tenant, alice)
@@ -120,15 +132,20 @@ def test_redelivery_is_a_no_op(
     job = _job(db, evidence_id)
 
     assert run_processing_job(db, storage, None, evidence_id, job.id) == "done"
-    pages, audits = _count(db, TextBlock, evidence_id=evidence_id), _count(db, AuditEvent)
+    pages, audits = _blocks(content, evidence_id), _count(db, AuditEvent)
     # Pub/Sub delivers at least once: the same message again changes nothing.
     assert run_processing_job(db, storage, None, evidence_id, job.id) == "skipped"
-    assert _count(db, TextBlock, evidence_id=evidence_id) == pages
+    assert _blocks(content, evidence_id) == pages
     assert _count(db, AuditEvent) == audits
 
 
 def test_job_held_by_another_worker_is_retried_later(
-    client: TestClient, make: Factory, db: Session, storage: LocalStorage, manual_queue: Queue
+    client: TestClient,
+    make: Factory,
+    db: Session,
+    storage: LocalStorage,
+    manual_queue: Queue,
+    content: LocalContent,
 ) -> None:
     alice = make.person(Role.INVESTIGATOR)
     case = make.case(alice.tenant, alice)
@@ -144,7 +161,7 @@ def test_job_held_by_another_worker_is_retried_later(
     job.lease_until = datetime.now(UTC) - timedelta(seconds=1)
     db.commit()
     assert run_processing_job(db, storage, None, evidence_id, job.id) == "done"
-    assert _count(db, DocumentPage, evidence_id=evidence_id) == 2
+    assert _pages(content, evidence_id) == 2
 
 
 class FlakyStorage:
@@ -340,11 +357,15 @@ def test_retention_is_off_until_a_period_is_set(
 
 
 def test_retention_deletes_old_files_but_keeps_the_record(
-    make: Factory, db: Session, storage: LocalStorage, monkeypatch: pytest.MonkeyPatch
+    make: Factory,
+    db: Session,
+    storage: LocalStorage,
+    content: LocalContent,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from datetime import UTC, datetime, timedelta
 
-    from app.db.models import AuditEvent, DocumentPage, Report
+    from app.db.models import AuditEvent, Report
     from app.enums import CaseStatus
     from app.ids import new_id
     from app.services import retention
@@ -360,16 +381,8 @@ def test_retention_deletes_old_files_but_keeps_the_record(
     fresh = make.evidence(new_case)
     for evidence in (old, fresh):
         storage.write(evidence.object_key, b"%PDF-1.4", "application/pdf")
-        db.add(
-            DocumentPage(
-                id=new_id("pg"),
-                evidence_id=evidence.id,
-                page_index=1,
-                text="x",
-                parser="pdf_text",
-                parser_version="1",
-            )
-        )
+        page = StoredPage(1, "", None, None, "pdf_text", "1", block_count=0, text="x")
+        content.replace(evidence.id, [page])
     report = Report(
         id=new_id("rep"),
         tenant_id=person.tenant.id,
@@ -392,7 +405,7 @@ def test_retention_deletes_old_files_but_keeps_the_record(
     db.refresh(old)
     db.refresh(fresh)
     assert old.purged_at is not None and storage.stat(old.object_key) is None
-    assert db.scalar(select(DocumentPage).where(DocumentPage.evidence_id == old.id)) is None
+    assert content.summaries(old.id) == [] and _pages(content, fresh.id) == 1
     assert fresh.purged_at is None and storage.stat(fresh.object_key) is not None
     assert db.get(Report, report.id) is None and storage.stat("tenants/x/report.pdf") is None
     assert db.scalar(

@@ -8,17 +8,17 @@ duplicates pages, audit events or webhooks.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import DocumentPage, EvidenceFile, ProcessingJob, TextBlock
+from app.db.models import EvidenceFile, ProcessingJob
 from app.enums import EvidenceStatus, JobStatus, WebhookEvent
-from app.ids import new_id
 from app.pipeline.errors import PermanentError, PipelineError, TransientError
 from app.pipeline.extract import Extraction, extract
 from app.pipeline.ocr import OcrProvider
 from app.services import audit, outbox
 from app.storage.backend import Storage
+from app.storage.content import from_extraction, get_content_store
 
 logger = logging.getLogger("pruflo.worker")
 
@@ -118,41 +118,13 @@ def _reconcile(db: Session, case_id: str) -> None:
 
 
 def _save(db: Session, evidence: EvidenceFile, result: Extraction) -> None:
-    # Replace earlier results so a rerun leaves exactly one copy.
-    db.execute(delete(DocumentPage).where(DocumentPage.evidence_id == evidence.id))
-    for page in result.pages:
-        page_row = DocumentPage(
-            id=new_id("pg"),
-            evidence_id=evidence.id,
-            page_index=page.index,
-            label=page.label,
-            text=page.text,
-            width=page.width,
-            height=page.height,
-            parser=page.parser,
-            parser_version=page.parser_version,
-        )
-        db.add(page_row)
-        db.flush()
-        db.add_all(
-            TextBlock(
-                id=new_id("blk"),
-                page_id=page_row.id,
-                evidence_id=evidence.id,
-                block_index=number,
-                text=block.text,
-                char_start=block.char_start,
-                char_end=block.char_end,
-                bbox=block.bbox.as_dict() if block.bbox else None,
-                cell_ref=block.cell_ref,
-                confidence=block.confidence,
-            )
-            for number, block in enumerate(page.blocks)
-        )
+    # The page text and blocks go to the document store (Firestore in
+    # production), replacing earlier results so a rerun leaves one copy.
+    get_content_store().replace(evidence.id, from_extraction(result.pages))
 
     parsers = sorted({f"{p.parser}:{p.parser_version}" for p in result.pages})
     evidence.parser_version = ", ".join(parsers)[:80]
-    # Claims (Steps 9 and 10), in the same transaction as the pages. A model
+    # Claims (Steps 9 and 10). A model
     # outage (TransientError) retries the whole job; a refusal keeps the text
     # and leaves the file for a manual check.
     from app.services.claims import extract_claims
