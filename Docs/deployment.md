@@ -15,7 +15,7 @@ Background on *why* it's set up this way is in `Docs/fix_plan.md`. In short: the
 
 ## What's done and what's left
 
-**Done, in the code on the `backend` branch (PR #15):**
+**Done, in the code on the `backend` branch** (not yet on `main`; PR #15 merged an earlier state):
 - Everything in `Docs/backend_plan.md`: uploads, extraction, grounding, the four rules, review, reports, export, integrations, notifications and Q&A.
 - The free-tier pieces: Firestore file storage, the Gemini API-key provider, the scheduled-work endpoint, Supabase-safe database roles, and the Render image, blueprint and start script.
 - 213 backend tests and 54 Flutter tests pass. The Render image was built and started locally: `/healthz` answers, and it runs as a non-root user.
@@ -165,7 +165,7 @@ PruFlo uses two database roles (`Docs/backend_plan.md`, Step 2):
    ```
 
 3. In https://dashboard.render.com (sign in with GitHub): **New → Blueprint** → connect `Veranzi/pruflo` → Render reads `render.yaml` and shows the service `pruflo-api` (Docker, free, Virginia, branch **`main`**).
-   - Render deploys from `main`. If PR #15 isn't merged yet, either merge it first (step 7) or change the branch to `backend` in the service's Settings after creating it.
+   - Render deploys from `main`. Until the `backend` branch is merged into `main` (step 7), either merge first or change the branch to `backend` in the service's Settings after creating it.
 4. Render asks for the values marked `sync: false`. Fill them in:
 
    | Variable | Value |
@@ -251,7 +251,7 @@ gh variable set FIREBASE_VAPID_KEY --body "..."
 gh secret set PRUFLO_TICK_TOKEN   # paste the value when asked
 ```
 
-Then **merge PR #15 (`backend` → `main`)**. That:
+Then **open a pull request from `backend` to `main` and merge it** once its checks pass (`gh pr create --base main --head backend --fill`, then merge on GitHub). Merging:
 - runs `firebase-hosting-merge.yml`, which rebuilds pruflo.web.app with the new Firebase config and `API_BASE_URL`
 - deploys Render (it follows `main`)
 - turns on `tick.yml` (scheduled workflows only run from `main`)
