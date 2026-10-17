@@ -44,7 +44,8 @@ contain the value and its label (or the table row it sits in).
 - page_hint is the page number shown in the "=== Page N ===" marker.
 - For per-item fields (quantities, unit price, line amount), set item to the \
 item's description as written, and unit to the unit of measure if stated.
-- For document_type use one of: purchase_order, delivery_note, invoice, other.
+- Always report document_type, quoting the document's title line. Use one of: \
+purchase_order, delivery_note, invoice, other.
 - If a field isn't stated, leave it out. Don't guess."""
 
 

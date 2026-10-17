@@ -340,7 +340,15 @@ def delivery_date_window(order: Order, grace_days: Decimal) -> list[Proposed]:
     if order.po is None or not order.deliveries:
         return []
     promised = order.po.first("promised_delivery_date")
-    dated = [d for d in (doc.first("delivery_date") for doc in order.deliveries) if d]
+    # A delivery note's own date is when the goods arrived, if it doesn't
+    # state a separate delivery date.
+    dated = [
+        d
+        for d in (
+            doc.first("delivery_date") or doc.first("document_date") for doc in order.deliveries
+        )
+        if d
+    ]
     if promised is None or not dated:
         return []
     try:
