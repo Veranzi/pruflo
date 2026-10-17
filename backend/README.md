@@ -227,17 +227,17 @@ PRUFLO_ADMIN_DATABASE_URL=... python -m app.cli db-roles --no-create
 
 It's safe to run again; do so after a migration that adds an append-only table. Tables added by later migrations get the runtime grants automatically.
 
-## Deploying for free (Firebase + Render + Supabase)
+## Deploying for free (Firebase + Cloud SQL + Render)
 
 The current deployment, with no Google Cloud billing (see `Docs/fix_plan.md`):
 
 | Piece | Runs on |
 | --- | --- |
 | Web app, sign-in, push | Firebase Hosting, Auth and Cloud Messaging (Spark plan) |
-| Uploaded files | Firestore in the same Firebase project (`PRUFLO_STORAGE_BACKEND=firestore`) |
+| Uploaded files and extracted page text | Firestore in the same Firebase project (`PRUFLO_STORAGE_BACKEND=firestore`, `PRUFLO_CONTENT_BACKEND=firestore`) |
 | API and worker | One Render free web service (`render.yaml`, `Dockerfile.render`); files are processed in the API process right after upload (`PRUFLO_QUEUE_BACKEND=inline`) |
 | Scheduled work | `.github/workflows/tick.yml` calls `POST /v1/internal/tick` every 30 minutes |
-| Postgres | Supabase (session pooler URL); `python -m app.cli db-roles` keeps Supabase's API roles away from our tables |
+| Postgres | Cloud SQL for PostgreSQL: the Firebase SQL Connect no-cost trial instance (public IP, SSL only, authorized networks) |
 | Document reading | Gemini API key (`gemini_api` provider), or the structured reader without one |
 
 `start-render.sh` runs the migrations as `pruflo_migrator` before starting the API. Firestore's security rules deny all browser access: only the backend's service account reads and writes files.

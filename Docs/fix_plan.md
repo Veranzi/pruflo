@@ -17,18 +17,18 @@ With no billing account, a Firebase project stays on the free **Spark** plan. Ch
 | Cloud Storage | ❌ needs Blaze since 3 Feb 2026 | Not used |
 | Cloud Functions, App Hosting, Cloud Run | ❌ need billing | The Python API can't run on Google |
 | Gemini paid tier | ❌ needs billing | The **free-tier Gemini API key** is used, for synthetic demo documents only (Google may use free-tier prompts to improve its products and have people review them) |
-| Postgres | ❌ Cloud SQL needs billing | Supabase (free) |
+| Postgres | ✅ Cloud SQL through Firebase SQL Connect: one no-cost instance for 90 days, no billing account | Cloud SQL for PostgreSQL 17 (trial) |
 
-**Rule risk, accepted by the team:** the hackathon asks for a prototype "built on Google Cloud". Firebase (Hosting, Auth, Firestore, push) and Gemini are Google, but the API and worker run on Render and the database on Supabase. If a Google Cloud credit coupon turns up, switch back to the Google Cloud setup in `backend_plan.md` Step 3 (the code still supports Cloud Storage, Pub/Sub, Cloud Run and Vertex through settings).
+**Rule risk, accepted by the team:** the hackathon asks for a prototype "built on Google Cloud". Firebase (Hosting, Auth, Firestore, push) and Gemini are Google, and so are Firestore and Cloud SQL, but the API and worker run on Render. If a Google Cloud credit coupon turns up, switch back to the Google Cloud setup in `backend_plan.md` Step 3 (the code still supports Cloud Storage, Pub/Sub, Cloud Run and Vertex through settings).
 
 ## Decisions (made 2026-10-17)
 
 | # | Decision | Choice |
 | --- | --- | --- |
-| D1 | Firebase project | A **new project in a separate Google account**, on Spark (replaces `login-register-125ef`). Hosting stays at `pruflo.web.app` (project `undercurrent-cb9f8`); that domain is authorised in the new project for sign-in |
+| D1 | Firebase project | **`login-register-125ef`** (display name Pruflo), on Spark, in the new Google account. It hosts `pruflo.web.app`; `undercurrent-cb9f8.web.app` gets the same build |
 | D2 | API and worker | **Render free web service** (Docker, region Virginia), one container for both |
-| D3 | Database | **Supabase Postgres** (free, US East), through the session pooler (IPv4) |
-| D4 | Uploaded files | **Firestore** in the new Firebase project (location `nam5`, United States), ~700 KB chunks per file |
+| D3 | Database | **Cloud SQL for PostgreSQL** (SQL Connect no-cost trial, `us-east4`) for structured records: cases, claims, findings, review actions, audit |
+| D4 | Unstructured content | **Firestore** (location `nam5`): uploaded files in ~700 KB chunks, and each file's extracted page text and text blocks (`PRUFLO_CONTENT_BACKEND=firestore`, migration 0009) |
 | D5 | Reading documents | **Gemini API, free key** (provider `gemini_api`), synthetic demo documents only; the structured reader (no model) is the fallback |
 | D6 | Queue and schedules | Files are processed in the API process right after upload (`PRUFLO_QUEUE_BACKEND=inline`); a GitHub Actions cron calls `POST /v1/internal/tick` every 30 minutes for retries and scheduled tasks |
 | D7 | OCR | None for now (Document AI needs billing; Tesseract doesn't fit in 512 MB). Scans end as `needs_review` |
@@ -43,9 +43,11 @@ Browser (pruflo.web.app, Firebase Hosting)
 Render: pruflo-api (FastAPI + inline worker)  ──►  Gemini API (free key)
   │            │                    ▲
   │            ▼                    │ POST /v1/internal/tick (every 30 min)
-  │     Firestore (files, chunked)  GitHub Actions
+  │     Firestore (files + extracted   GitHub Actions
+  │      page text and blocks)
   ▼
-Supabase Postgres (pruflo_migrator owns the schema, pruflo_app at runtime)
+Cloud SQL for PostgreSQL (structured records; pruflo_migrator owns the
+schema, pruflo_app at runtime)
 ```
 
 - **Uploads:** endpoint 7 returns a link to `/v1/objects/...` on the API, HMAC-signed, valid 10 minutes, with the type and the 25 MB limit in the signature. The browser PUTs the file there; the API checks it while it streams in and stores it in Firestore. Endpoint 8 then checks the real type, pages and checksum as before.
@@ -62,7 +64,7 @@ Supabase Postgres (pruflo_migrator owns the schema, pruflo_app at runtime)
 | Firebase service-account key from `PRUFLO_FIREBASE_CREDENTIALS` (sign-in checks, push, Firestore) | ✅ |
 | `FirestoreStorage`: chunked files, checksum-verified reads, signed upload and view links through `/v1/objects` | ✅ tested (in-memory Firestore that enforces the 1 MiB limit) |
 | `POST /v1/internal/tick` (token-protected): drain waiting files and retries, reconcile, webhook retries, connector sync, retention, Monday summary | ✅ tested |
-| Database roles safe on Supabase: no database-wide revoke, and `anon`/`authenticated` lose every privilege on our tables | ✅ tested |
+| Extracted page text and blocks in Firestore (`app/storage/content.py`; migration 0009 drops `document_pages` and `text_blocks`) | ✅ tested (in-memory Firestore that enforces the 1 MiB limit) |
 | `Dockerfile.render` + `start-render.sh` (migrations as `pruflo_migrator` at start, then uvicorn) and `render.yaml` | ✅ written; first real run at deploy |
 | `.github/workflows/tick.yml` | ✅ written; runs once it's on `main` |
 | Frontend: Firebase config from the build (no default project), the `gemini_api` provider option; deploy workflows pass `FIREBASE_PROJECT_ID` and `FIREBASE_AUTH_DOMAIN` | ✅ |
@@ -73,16 +75,16 @@ Supabase Postgres (pruflo_migrator owns the schema, pruflo_app at runtime)
 | Step | Who | Status |
 | --- | --- | --- |
 | New Firebase project: web app, Firestore (`nam5`, production mode), Email/Password + Google sign-in, authorised domains, Web Push key, service-account key | Team | ❌ |
-| Supabase project (US East), session pooler URL, Data API off | Team | ❌ |
+| Cloud SQL trial instance via SQL Connect (`us-east4`), database `pruflo`, `postgres` password, authorized networks, SSL only | Team | ❌ |
 | Gemini API key (AI Studio, new account) | Team | ❌ |
 | Render account linked to GitHub | Team | ❌ |
 | `backend/.env.deploy` with the database URL and Gemini key (git-ignored) | Team | ❌ |
 
 ### Deploy (in order)
 
-1. **Database:** create the roles and run the migrations against Supabase from this machine (`python -m app.cli db-roles`, then `alembic upgrade head` as `pruflo_migrator`).
+1. **Database:** create the roles and run the migrations against Cloud SQL from this machine (`python -m app.cli db-roles`, then `alembic upgrade head` as `pruflo_migrator`).
 2. **Render:** New → Blueprint → this repository (`render.yaml`, branch `backend`). Paste the secrets from the generated `backend/.env.render` (git-ignored) with **Add from .env**. Wait for `/readyz` to answer.
-3. **Organisation:** create it and its first admin with `python -m app.cli bootstrap` against the Supabase database.
+3. **Organisation:** create it and its first admin with `python -m app.cli bootstrap` against the Cloud SQL database.
 4. **GitHub:**
    - variables: `API_BASE_URL` = the Render URL, and the new Firebase web config (`FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_PROJECT_ID`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_VAPID_KEY`)
    - secret: `PRUFLO_TICK_TOKEN`
@@ -95,9 +97,9 @@ Supabase Postgres (pruflo_migrator owns the schema, pruflo_app at runtime)
 
 - Render sleeps after 15 idle minutes; the first request after that takes about a minute. With 0.1 CPU and 512 MB, a 200-page PDF takes minutes, not seconds.
 - Firestore free quota: 1 GiB stored and 20,000 writes a day. A 25 MB file uses about 37 writes and 25 MB, so roughly 40 files at the maximum size fill the free storage.
-- Supabase free: 500 MB database; a project pauses after 7 days with no database requests (the 30-minute tick prevents that). No point-in-time backups: take a `pg_dump` before demos.
+- Cloud SQL trial: about 8,000 operations a day and 10 GB; suspended after 90 days unless billing is enabled. Take a `pg_dump` before demos.
 - Gemini free tier: rate limits, and prompts may be used by Google. Synthetic documents only.
-- Data is stored in the United States (Render Virginia, Supabase East US, Firestore `nam5`). Firebase Auth keeps sign-in records in Google's infrastructure.
+- Data is stored in the United States (Render Virginia, Cloud SQL `us-east4`, Firestore `nam5`). Firebase Auth keeps sign-in records in Google's infrastructure.
 
 ## Moving to Google Cloud later
 
