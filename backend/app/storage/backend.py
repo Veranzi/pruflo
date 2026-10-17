@@ -1,8 +1,11 @@
 """Object storage behind one small interface.
 
-- ``GcsStorage``: private Cloud Storage bucket with V4 signed URLs (Cloud Run).
-- ``LocalStorage``: files on disk; upload and view links point at this API and
-  are HMAC-signed. Only mounted when PRUFLO_ENV is local or test.
+- ``FirestoreStorage``: files in Cloud Firestore (Firebase, free Spark plan),
+  split into chunks under one document per file. Upload and view links point
+  at this API and are HMAC-signed, expiring and size-limited.
+- ``LocalStorage``: files on disk with the same signed links (local and test).
+- ``GcsStorage``: a private Cloud Storage bucket with V4 signed URLs, for a
+  deployment with Google Cloud billing.
 
 Signed URLs are never logged.
 """
@@ -11,12 +14,13 @@ import base64
 import contextlib
 import hashlib
 import hmac
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 from app.config import get_settings
@@ -116,17 +120,13 @@ class GcsStorage:
             self._bucket.blob(key).delete()
 
 
-class LocalStorage:
-    def __init__(self, root: str, signing_key: str, base_url: str) -> None:
-        self.root = Path(root).resolve()
+class SignedLinks:
+    """Links to this API's /v1/objects route, HMAC-signed over method, key,
+    expiry and (for uploads) the content type and size limit."""
+
+    def __init__(self, signing_key: str, base_url: str) -> None:
         self._key = signing_key.encode()
         self._base = base_url.rstrip("/")
-
-    def path(self, key: str) -> Path:
-        target = (self.root / key).resolve()
-        if not target.is_relative_to(self.root):
-            raise ValueError("object key escapes the storage root")
-        return target
 
     def sign(self, method: str, key: str, expires: int, extra: str = "") -> str:
         message = f"{method}\n{key}\n{expires}\n{extra}".encode()
@@ -143,7 +143,7 @@ class LocalStorage:
         expires = int(expires_at.timestamp())
         sig = self.sign(method, key, expires, extra)
         return (
-            f"{self._base}/v1/_local/objects/{quote(key)}?expires={expires}&sig={sig}",
+            f"{self._base}/v1/objects/{quote(key)}?expires={expires}&sig={sig}",
             expires_at,
         )
 
@@ -155,6 +155,28 @@ class LocalStorage:
     def view_url(self, key: str, file_name: str, content_type: str) -> SignedRequest:
         url, expires_at = self._url("GET", key)
         return SignedRequest(url, "GET", expires_at)
+
+    # Implemented by each store.
+    def stat(self, key: str) -> ObjectInfo | None:
+        raise NotImplementedError
+
+    def read(self, key: str) -> bytes:
+        raise NotImplementedError
+
+    def write(self, key: str, data: bytes, content_type: str) -> None:
+        raise NotImplementedError
+
+
+class LocalStorage(SignedLinks):
+    def __init__(self, root: str, signing_key: str, base_url: str) -> None:
+        super().__init__(signing_key, base_url)
+        self.root = Path(root).resolve()
+
+    def path(self, key: str) -> Path:
+        target = (self.root / key).resolve()
+        if not target.is_relative_to(self.root):
+            raise ValueError("object key escapes the storage root")
+        return target
 
     def stat(self, key: str) -> ObjectInfo | None:
         target = self.path(key)
@@ -179,16 +201,120 @@ class LocalStorage:
         target.with_name(target.name + ".type").unlink(missing_ok=True)
 
 
+class FirestoreStorage(SignedLinks):
+    """Files in Cloud Firestore, for the free Firebase plan (no Cloud Storage).
+
+    One document per file in ``collection`` (ID: SHA-256 of the key) holds the
+    key, type, size, checksum and chunk count; the bytes are in its ``chunks``
+    subcollection, ``CHUNK`` bytes per document (Firestore allows 1 MiB). The
+    file document is written last, so a half-written upload is never visible.
+    Access is server-side only (the service account); security rules deny
+    every browser read and write.
+    """
+
+    CHUNK = 700 * 1024
+    PER_BATCH = 8  # about 5.6 MB per commit, under Firestore's request limit
+
+    def __init__(self, client: Any, collection: str, signing_key: str, base_url: str) -> None:
+        super().__init__(signing_key, base_url)
+        self._files = client.collection(collection)
+        self._client = client
+
+    def _doc(self, key: str) -> Any:
+        return self._files.document(hashlib.sha256(key.encode()).hexdigest())
+
+    def stat(self, key: str) -> ObjectInfo | None:
+        snapshot = self._doc(key).get()
+        if not snapshot.exists:
+            return None
+        data = snapshot.to_dict() or {}
+        return ObjectInfo(size=int(data.get("size", 0)), content_type=data.get("content_type"))
+
+    def read(self, key: str) -> bytes:
+        doc = self._doc(key)
+        snapshot = doc.get()
+        if not snapshot.exists:
+            raise FileNotFoundError(key)
+        meta = snapshot.to_dict() or {}
+        parts = [
+            bytes((doc.collection("chunks").document(f"{n:05d}").get().to_dict() or {})["data"])
+            for n in range(int(meta["chunks"]))
+        ]
+        data = b"".join(parts)
+        if len(data) != int(meta["size"]) or hashlib.sha256(data).hexdigest() != meta["sha256"]:
+            raise OSError(f"stored file {key} is incomplete")
+        return data
+
+    def write(self, key: str, data: bytes, content_type: str) -> None:
+        doc = self._doc(key)
+        self._delete_chunks(doc)
+        pieces = [data[i : i + self.CHUNK] for i in range(0, len(data), self.CHUNK)] or [b""]
+        for start in range(0, len(pieces), self.PER_BATCH):
+            batch = self._client.batch()
+            for n, piece in enumerate(pieces[start : start + self.PER_BATCH], start=start):
+                batch.set(doc.collection("chunks").document(f"{n:05d}"), {"data": piece})
+            batch.commit()
+        doc.set(
+            {
+                "key": key,
+                "content_type": content_type,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "chunks": len(pieces),
+                "created_at": datetime.now(UTC),
+            }
+        )
+
+    def _delete_chunks(self, doc: Any) -> None:
+        refs = [snap.reference for snap in doc.collection("chunks").stream()]
+        for start in range(0, len(refs), 400):
+            batch = self._client.batch()
+            for ref in refs[start : start + 400]:
+                batch.delete(ref)
+            batch.commit()
+
+    def delete(self, key: str) -> None:
+        doc = self._doc(key)
+        doc.delete()  # the file disappears first, then its pieces
+        self._delete_chunks(doc)
+
+
+def firestore_client() -> Any:
+    """Firestore with the Firebase service-account key. Replaced in tests."""
+    from google.cloud import firestore
+    from google.oauth2 import service_account
+
+    from app.auth.firebase import service_account_info
+
+    info = service_account_info()
+    if info is None:
+        raise RuntimeError("Set PRUFLO_FIREBASE_CREDENTIALS to use Firestore storage.")
+    credentials = service_account.Credentials.from_service_account_info(info)  # type: ignore[no-untyped-call]
+    project = get_settings().firebase_project or str(info["project_id"])
+    return firestore.Client(project=project, credentials=credentials)
+
+
 @lru_cache
 def _default_storage() -> Storage:
     settings = get_settings()
     if settings.storage_backend == "gcs":
         return GcsStorage(settings.evidence_bucket)
+    signing_key = settings.storage_signing_key
+    if not signing_key:
+        if settings.env not in ("local", "test"):
+            raise RuntimeError("Set PRUFLO_STORAGE_SIGNING_KEY to sign upload and view links.")
+        signing_key = _LOCAL_SIGNING_KEY
+    if settings.storage_backend == "firestore":
+        return FirestoreStorage(
+            firestore_client(), settings.firestore_collection, signing_key, settings.public_base_url
+        )
     if settings.env not in ("local", "test"):
         raise RuntimeError("Local storage is only allowed when PRUFLO_ENV is local or test.")
-    return LocalStorage(
-        settings.local_storage_dir, settings.local_signing_key, settings.public_base_url
-    )
+    return LocalStorage(settings.local_storage_dir, signing_key, settings.public_base_url)
+
+
+# Local development only, when no signing key is set.
+_LOCAL_SIGNING_KEY = secrets.token_urlsafe(32)
 
 
 def get_storage() -> Storage:

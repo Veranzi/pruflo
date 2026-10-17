@@ -307,6 +307,7 @@ enum OcrProvider {
 
 enum AiProvider {
   vertexGemini('vertex_gemini', 'Gemini on Vertex AI'),
+  geminiApi('gemini_api', 'Gemini API (paid key)'),
   vertexClaude('vertex_claude', 'Claude on Vertex AI'),
   azureOpenAi('azure_openai', 'Azure OpenAI'),
   selfHosted('self_hosted', 'Self-hosted model');

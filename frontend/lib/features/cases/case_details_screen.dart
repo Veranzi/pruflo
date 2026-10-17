@@ -14,8 +14,8 @@ import '../../widgets/form_fields.dart';
 import '../../widgets/status_chip.dart';
 import 'case_members_section.dart';
 
-/// One case: overview, its evidence and its timeline
-/// (GET /v1/cases/{id}, /evidence, /timeline).
+/// One case: overview, its evidence, its timeline and the optional assistant
+/// (GET /v1/cases/{id}, /evidence, /timeline; POST /qa).
 class CaseDetailsScreen extends StatefulWidget {
   const CaseDetailsScreen({super.key, required this.caseId});
 
@@ -80,7 +80,7 @@ class _CaseView extends StatelessWidget {
   Widget build(BuildContext context) {
     final canEdit = AuthService.instance.user?.role.canEditCases ?? false;
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -144,6 +144,7 @@ class _CaseView extends StatelessWidget {
                     Tab(text: 'Overview'),
                     Tab(text: 'Evidence'),
                     Tab(text: 'Timeline'),
+                    Tab(text: 'Ask'),
                   ],
                 ),
               ],
@@ -156,6 +157,7 @@ class _CaseView extends StatelessWidget {
                 _OverviewTab(item),
                 _EvidenceTab(item),
                 _TimelineTab(item),
+                _AskTab(item),
               ],
             ),
           ),
@@ -372,6 +374,144 @@ class _TimelineTabState extends State<_TimelineTab> {
 }
 
 /// Newest-first list of timeline events (endpoint 16).
+/// Endpoint 20: questions about the case, answered from its findings, claims
+/// and timeline with citations. Machine-generated, read-only, optional.
+class _AskTab extends StatefulWidget {
+  const _AskTab(this.item);
+  final CaseItem item;
+
+  @override
+  State<_AskTab> createState() => _AskTabState();
+}
+
+class _AskTabState extends State<_AskTab> {
+  final _question = TextEditingController();
+  final _api = PrufloApi();
+  CaseAnswer? _answer;
+  String? _error;
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _question.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ask() async {
+    final question = _question.text.trim();
+    if (question.length < 3 || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final answer = await _api.ask(widget.item.id, question);
+      if (mounted) setState(() => _answer = answer);
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(
+          () => _error = e.code == 'assistant_unavailable'
+              ? 'The case assistant isn\'t set up for this organisation.'
+              : e.message,
+        );
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final answer = _answer;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Ask about this case. Answers come only from its findings, the '
+                'values read from its documents and its timeline, with references. '
+                'They are machine-generated and never decide anything.',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _question,
+                maxLength: 500,
+                minLines: 1,
+                maxLines: 3,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _ask(),
+                decoration: const InputDecoration(
+                  hintText: 'e.g. Which items were delivered short?',
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: _busy ? null : _ask,
+                  child: Text(_busy ? 'Asking…' : 'Ask'),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(color: AppColors.danger)),
+              ],
+              if (answer != null) ...[
+                const SizedBox(height: 16),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SelectableText(answer.answer),
+                        if (answer.citations.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final c in answer.citations)
+                                ActionChip(
+                                  label: Text(
+                                    '${c.type == 'finding' ? 'Finding' : 'Value'} '
+                                    '${c.id.substring(c.id.length - 6)}',
+                                  ),
+                                  onPressed: () => context.go(
+                                    '/review?case=${widget.item.id}',
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Machine-generated',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class TimelineList extends StatelessWidget {
   const TimelineList(this.events, {super.key, this.padding});
   final List<TimelineItem> events;

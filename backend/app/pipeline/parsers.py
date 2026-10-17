@@ -101,11 +101,16 @@ def parse_docx(data: bytes) -> list[Page]:
         elif isinstance(item, Table):
             table_number += 1
             for row_number, row in enumerate(item.rows, start=1):
-                cells = _dedupe_merged([cell.text.strip() for cell in row.cells])
+                raw = [cell.text.strip() for cell in row.cells]  # one per column
+                cells = _dedupe_merged(raw)
                 text = CELL_SEPARATOR.join(c for c in cells if c)
                 if text:
                     page.blocks.append(
-                        Block(text=text, cell_ref=f"table {table_number}, row {row_number}")
+                        Block(
+                            text=text,
+                            cell_ref=f"table {table_number}, row {row_number}",
+                            cells=raw,
+                        )
                     )
     return [page]
 
@@ -149,7 +154,7 @@ def _rows_to_page(
                 if last_column
                 else (f"row {row_number}")
             )
-            page.blocks.append(Block(text=text, cell_ref=cell_ref))
+            page.blocks.append(Block(text=text, cell_ref=cell_ref, cells=cells))
     return page
 
 

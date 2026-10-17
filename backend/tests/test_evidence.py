@@ -234,8 +234,18 @@ def test_new_evidence_reopens_a_reviewed_case(
     case.status = CaseStatus.COMPLETED
     db.commit()
     upload(client, alice, case.id)
-    db.refresh(case)
-    assert case.status == CaseStatus.AWAITING_EVIDENCE
+    # (Set, not list: in a test both events share one transaction timestamp.)
+    moves = {
+        (e.details["from"], e.details["to"])
+        for e in db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.case_id == case.id, AuditEvent.action == "case.status_changed"
+            )
+        )
+    }
+    # Reopened by the upload; once processed, the rules found nothing to
+    # review in this blank PDF, so it's completed again.
+    assert moves == {("completed", "awaiting_evidence"), ("awaiting_evidence", "completed")}
 
 
 def test_retry_failed_processing_queues_a_new_job(

@@ -23,8 +23,8 @@ ADMIN = Depends(require(Permission.ADMIN))
 # Providers with a working adapter today. Others are listed in the UI so the
 # setting is ready, but return 400 provider_not_available until built.
 OCR_ADAPTERS = {OcrProviderName.GOOGLE_DOCUMENT_AI}
-AI_ADAPTERS = {AiProviderName.VERTEX_GEMINI}
-# No free-text model names ever reach Vertex.
+AI_ADAPTERS = {AiProviderName.VERTEX_GEMINI, AiProviderName.GEMINI_API}
+# No free-text model names ever reach Gemini.
 MODEL_ALLOWLIST = {"gemini-2.5-flash", "gemini-2.5-pro"}
 REGIONS = {"asia-southeast1", "asia-southeast2"}  # Singapore, Jakarta
 DEFAULT_MODEL = "gemini-2.5-flash"

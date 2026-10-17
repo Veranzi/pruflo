@@ -40,6 +40,7 @@ import os
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.models import ProviderSettings, Tenant, User
 from app.db.roles import apply_roles
 from app.db.session import get_engine
@@ -56,7 +57,9 @@ def bootstrap(db: Session, tenant_name: str, admin_email: str, admin_name: str) 
     db.add(tenant)
     db.flush()
     users.invite(db, tenant.id, email, Role.ADMIN, admin_name)
-    db.add(ProviderSettings(tenant_id=tenant.id, model=DEFAULT_MODEL))
+    # With a Gemini API key configured, new organisations use it; otherwise Vertex.
+    ai = "gemini_api" if get_settings().gemini_api_key else "vertex_gemini"
+    db.add(ProviderSettings(tenant_id=tenant.id, model=DEFAULT_MODEL, ai=ai))
     db.commit()
     return tenant
 

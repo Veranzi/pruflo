@@ -494,6 +494,23 @@ class Finding {
   }
 }
 
+/// An answer from the case assistant (endpoint 20). Machine-generated: it
+/// cites the findings and claims it's based on, and never decides anything.
+class CaseAnswer {
+  const CaseAnswer(this.answer, this.citations);
+
+  factory CaseAnswer.fromJson(Map<String, dynamic> j) => CaseAnswer(
+        (j['answer'] as String?) ?? '',
+        [
+          for (final c in (j['citations'] as List?) ?? const [])
+            (type: (c as Map)['type'] as String, id: c['id'] as String),
+        ],
+      );
+
+  final String answer;
+  final List<({String type, String id})> citations;
+}
+
 /// A generated PDF report (endpoints 17–19).
 class ReportItem {
   const ReportItem({

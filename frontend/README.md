@@ -4,7 +4,7 @@ The Flutter client for Pruflo. People use it to create cases, upload evidence, r
 
 The app has no data of its own. Every screen reads from and writes to the Pruflo API (`backend/`) and shows a loading, empty or error state while it waits. The API is described in [`Docs/API_Contract.md`](../Docs/API_Contract.md) and [`Docs/Integrations_API_Contract.md`](../Docs/Integrations_API_Contract.md).
 
-- Production: https://pruflo.web.app (Firebase Hosting, project `login-register-125ef`)
+- Production: https://pruflo.web.app (Firebase Hosting in project `undercurrent-cb9f8`; sign-in, push and files in the Firebase project from `Docs/deployment.md`)
 - Targets: web (primary). Android and iOS build from the same code but aren't released yet.
 
 ## Requirements
@@ -23,8 +23,8 @@ All settings are passed at build time with `--dart-define=NAME=value`. None of t
 | `FIREBASE_API_KEY` | *(empty)* | Turns on Firebase Auth. Without it the app uses development sign-in (below) |
 | `FIREBASE_APP_ID` | *(empty)* | Firebase web app ID, `1:...:web:...` |
 | `FIREBASE_MESSAGING_SENDER_ID` | *(empty)* | Firebase sender ID |
-| `FIREBASE_PROJECT_ID` | `login-register-125ef` | Firebase project |
-| `FIREBASE_AUTH_DOMAIN` | `login-register-125ef.firebaseapp.com` | Firebase auth domain |
+| `FIREBASE_PROJECT_ID` | *(required)* | Firebase project for sign-in and push |
+| `FIREBASE_AUTH_DOMAIN` | `<project id>.firebaseapp.com` | Firebase auth domain |
 | `FIREBASE_APP_CHECK_SITE_KEY` | *(empty)* | reCAPTCHA v3 site key. When set, every API call carries an App Check token |
 | `FIREBASE_VAPID_KEY` | *(empty)* | Web push key (Firebase console → Cloud Messaging → Web Push certificates). With the Firebase config, the app asks for notification permission after sign-in and registers the browser for push. Empty: in-app notifications only |
 
@@ -70,7 +70,7 @@ The API requires an App Check token in production unless it runs with `PRUFLO_AP
 }
 ```
 
-Then run `flutter run -d chrome --dart-define-from-file=dart_defines.local.json`. Run the API with `PRUFLO_FIREBASE_PROJECT=login-register-125ef` and `PRUFLO_FIREBASE_CHECK_REVOKED=false` (see `backend/.env.example`). Sign in with an invited email: Google sign-in links immediately; email/password needs the verification link first.
+Then run `flutter run -d chrome --dart-define-from-file=dart_defines.local.json`. Run the API with `PRUFLO_FIREBASE_PROJECT=<your project id>` and `PRUFLO_FIREBASE_CHECK_REVOKED=false` (see `backend/.env.example`). Sign in with an invited email: Google sign-in links immediately; email/password needs the verification link first.
 
 **Development sign-in.** Builds without `FIREBASE_API_KEY` show a yellow "Development sign-in" banner and ask only for an email address. The app then sends the API's development token (`dev:<uid>:<email>`). The API accepts it only when it runs with `PRUFLO_ENV=local` and `PRUFLO_AUTH_DEV_MODE=true`, so this mode can't sign anyone in to a deployed API. The email is remembered in the browser, so reloading the page keeps you signed in on the page you were on; signing out forgets it, and if the API stops accepting the email (for example, it was removed) the app forgets it and shows the sign-in page.
 

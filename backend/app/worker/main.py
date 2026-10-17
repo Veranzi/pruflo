@@ -9,6 +9,10 @@
   webhook deliveries on the contract's schedule.
 - POST /tasks/sync-connectors: Cloud Scheduler (every 15 minutes) imports new
   files from Odoo, Google Drive and SharePoint.
+- POST /tasks/reconcile: Cloud Scheduler (every 15 minutes) runs the rules
+  for any case whose files are done but that wasn't reconciled.
+- POST /tasks/retention: Cloud Scheduler (daily) deletes reports and evidence
+  past their retention periods (both off by default).
 
 Both require a Google-signed OIDC token for one of the allowed service
 accounts. The service must not be reachable without it.
@@ -21,11 +25,12 @@ import logging
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db.session import get_db
+from app.db.session import database_ready, get_db
 from app.errors import forbidden, install_error_handlers, unauthorized
 from app.logging import configure_logging
 from app.middleware import install_request_middleware
@@ -80,7 +85,11 @@ def create_worker_app() -> FastAPI:
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "release": get_settings().release}
+
+    @app.get("/readyz", response_model=None)
+    def readyz(db: Session = Depends(get_db)) -> dict[str, str] | JSONResponse:
+        return database_ready(db)
 
     @app.post("/pubsub/push", dependencies=[Depends(verify_invoker)])
     def pubsub_push(
@@ -145,6 +154,24 @@ def create_worker_app() -> FastAPI:
         totals = sync_due(db, queue.storage)
         dispatch_outbox(db, queue.publisher)
         return totals
+
+    @app.post("/tasks/reconcile", dependencies=[Depends(verify_invoker)])
+    def reconcile(
+        db: Session = Depends(get_db), queue: Queue = Depends(get_queue)
+    ) -> dict[str, int]:
+        from app.services.reconcile import reconcile_waiting
+
+        done = reconcile_waiting(db)
+        dispatch_outbox(db, queue.publisher)
+        return {"reconciled": done}
+
+    @app.post("/tasks/retention", dependencies=[Depends(verify_invoker)])
+    def retention(
+        db: Session = Depends(get_db), queue: Queue = Depends(get_queue)
+    ) -> dict[str, int]:
+        from app.services import retention as retention_service
+
+        return retention_service.run(db, queue.storage)
 
     return app
 

@@ -10,11 +10,18 @@
 ``apply_roles`` is idempotent: run it once after creating the database, and
 again after migrations that add append-only tables. On Cloud SQL, create the
 two users with gcloud first and pass ``create=False``.
+
+On Supabase (detected by its ``supabase_admin`` role) database-wide access
+isn't revoked from PUBLIC, because Supabase's own services rely on it.
+Instead its API roles (``anon``, ``authenticated``) lose every privilege on
+our tables, so nothing is reachable through Supabase's Data API even if it
+is switched on by mistake.
 """
 
 from sqlalchemy import Connection, text
 
 APPEND_ONLY_TABLES = ("review_actions", "audit_events")
+SUPABASE_API_ROLES = ("anon", "authenticated")
 
 
 def _ident(name: str) -> str:
@@ -52,8 +59,10 @@ def apply_roles(
     if conn.execute(text("SELECT current_user")).scalar_one() != migrator:
         conn.execute(text(f"GRANT {m} TO CURRENT_USER"))
 
+    supabase = _role_exists(conn, "supabase_admin")
     # Nobody else gets anything by default.
-    conn.execute(text(f"REVOKE ALL ON DATABASE {db} FROM PUBLIC"))
+    if not supabase:
+        conn.execute(text(f"REVOKE ALL ON DATABASE {db} FROM PUBLIC"))
     conn.execute(text("REVOKE CREATE ON SCHEMA public FROM PUBLIC"))
     conn.execute(text(f"GRANT CONNECT, TEMPORARY ON DATABASE {db} TO {m}, {r}"))
 
@@ -108,10 +117,28 @@ def apply_roles(
     for table in APPEND_ONLY_TABLES:
         if any(name == table for name, _ in owned):
             conn.execute(text(f"REVOKE UPDATE, DELETE ON public.{_ident(table)} FROM {r}"))
+    if supabase:
+        for api_role in SUPABASE_API_ROLES:
+            if _role_exists(conn, api_role):
+                a = _ident(api_role)
+                conn.execute(text(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {a}"))
+                conn.execute(text(f"REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {a}"))
+                conn.execute(
+                    text(
+                        f"ALTER DEFAULT PRIVILEGES FOR ROLE {m} IN SCHEMA public "
+                        f"REVOKE ALL ON TABLES FROM {a}"
+                    )
+                )
     # alembic_version belongs to migrations only.
     if any(name == "alembic_version" for name, _ in owned):
         conn.execute(text(f"REVOKE ALL ON public.alembic_version FROM {r}"))
         conn.execute(text(f"GRANT SELECT ON public.alembic_version TO {r}"))
+
+
+def _role_exists(conn: Connection, role: str) -> bool:
+    return bool(
+        conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :n"), {"n": role}).scalar()
+    )
 
 
 def _owned_by_column(conn: Connection, sequence: str) -> bool:

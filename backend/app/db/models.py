@@ -192,6 +192,9 @@ class EvidenceFile(Timestamped, Base):
     parser_version: Mapped[str | None] = mapped_column(String(80))
     uploaded_by: Mapped[str | None] = mapped_column(_fk("users.id"))
     uploaded_at: Mapped[datetime | None] = mapped_column(TZ)
+    # Set when the retention job deleted the file and its text; the row stays
+    # for the audit trail and the findings that cite it.
+    purged_at: Mapped[datetime | None] = mapped_column(TZ)
     source: Mapped[str] = mapped_column(String(20), server_default=EvidenceSource.UPLOAD)
     # The source's own ID for the file (message, Drive file, Odoo attachment).
     source_ref: Mapped[str | None] = mapped_column(String(300))
@@ -263,6 +266,10 @@ class ExtractedClaim(Timestamped, Base):
     case_id: Mapped[str] = mapped_column(_fk("cases.id"), index=True)
     evidence_id: Mapped[str] = mapped_column(_fk("evidence_files.id"), index=True)
     field_name: Mapped[str] = mapped_column(String(80))
+    # Line items: the item as written; the rule engine normalises it to match documents.
+    item_key: Mapped[str | None] = mapped_column(String(200))
+    # Where in the document: a cell range, a column label.
+    context: Mapped[str] = mapped_column(String(300), server_default="")
     raw_value: Mapped[str | None] = mapped_column(Text)
     normalized_value: Mapped[str | None] = mapped_column(Text)  # decimals kept as strings
     data_type: Mapped[str] = mapped_column(String(20))
