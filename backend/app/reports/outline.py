@@ -30,6 +30,22 @@ NAVY = (10, 26, 63)
 BLUE = (22, 82, 240)
 
 
+def conclusion(findings: list[dict[str, Any]]) -> str:
+    """One factual line summing up the findings and where review stands."""
+    if not findings:
+        return "Conclusion: the rules found no discrepancies between the documents."
+    severities = Counter(f["severity"] for f in findings)
+    reviews = Counter(f["review"]["status"] for f in findings)
+    by_severity = ", ".join(
+        f"{severities[s]} {s}" for s in ("high", "medium", "low") if severities.get(s)
+    )
+    return (
+        f"Conclusion: {len(findings)} finding(s) ({by_severity}); "
+        f"{reviews.get('approve', 0)} approved, {reviews.get('reject', 0)} rejected, "
+        f"{reviews.get('pending', 0)} awaiting review."
+    )
+
+
 def header_text(case: Case) -> str:
     return f"Case report · {case.reference}"
 
@@ -89,7 +105,7 @@ def write(
 
     detailed = report_type == "detailed"
     if report_type != "executive" and "evidence" in sections:
-        w.heading("Evidence")
+        w.heading("Evidence Summary")
         if not evidence:
             w.para("No evidence has been uploaded.")
         for e in evidence:
@@ -101,7 +117,7 @@ def write(
             w.para(line, size=8.5, color=90)
 
     if "findings" in sections or report_type == "executive":
-        w.heading("Findings")
+        w.heading("Findings & Conclusion")
         shown = (
             [f for f in findings if f["review"]["status"] == "pending"]
             if report_type == "executive"
@@ -137,6 +153,7 @@ def write(
                         f"{e['file_name']} p{e['page']}: “{e['quote']}” ({e['grounding']})",
                     )
             w.gap(1.5)
+        w.para(conclusion(findings), bold=True, size=10)
 
     if report_type != "executive" and "timeline" in sections:
         w.heading("Timeline")
@@ -149,7 +166,7 @@ def write(
             w.para(f"{when}  ·  {title}  ·  {who}", size=8.5, color=60)
 
     if "recommendations" in sections and report_type != "executive":
-        w.heading("Next steps")
+        w.heading("Recommendations")
         pending = [f for f in findings if f["review"]["status"] == "pending"]
         failed = [e for e in evidence if e.status in ("failed_terminal", "needs_review")]
         steps = []

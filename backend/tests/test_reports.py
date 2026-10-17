@@ -64,7 +64,9 @@ def test_generate_list_and_download_detailed_report(client: TestClient, make: Fa
         "Qty ordered: 100",
         "Timeline",
         "human interpretation",
-        "Next steps",
+        "Recommendations",
+        "Findings & Conclusion",
+        "Conclusion: 1 finding(s)",
     ):
         assert expected in text, expected
 
@@ -101,7 +103,14 @@ def test_word_report_has_the_same_content(client: TestClient, make: Factory) -> 
     assert "PruFlo" in header.text and case.reference in header.text
     assert header._p.xpath(".//pic:pic")  # the logo
     assert "page" in document.sections[0].footer.paragraphs[0].text
-    for expected in (case.reference, "Quantity shortfall", "reject by Rita Reviewer", "Timeline"):
+    for expected in (
+        case.reference,
+        "Quantity shortfall",
+        "reject by Rita Reviewer",
+        "Timeline",
+        "Recommendations",
+        "Conclusion: 1 finding(s)",
+    ):
         assert expected in text, expected
 
 
