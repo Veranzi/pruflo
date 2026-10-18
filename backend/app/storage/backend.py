@@ -295,7 +295,11 @@ class FirestoreStorage(SignedLinks):
 
 
 def firestore_client() -> Any:
-    """Firestore with the Firebase service-account key. Replaced in tests."""
+    """Firestore in the Firebase project. Replaced in tests.
+
+    Uses the Firebase service-account key when one is set (hosts outside
+    Google Cloud), and otherwise the runtime identity (Cloud Run), which may
+    belong to another project if it was granted access to this one."""
     from google.cloud import firestore
     from google.oauth2 import service_account
 
@@ -303,7 +307,9 @@ def firestore_client() -> Any:
 
     info = service_account_info()
     if info is None:
-        raise RuntimeError("Set PRUFLO_FIREBASE_CREDENTIALS to use Firestore storage.")
+        settings = get_settings()
+        project = settings.firebase_project or settings.gcp_project
+        return firestore.Client(project=project)
     credentials = service_account.Credentials.from_service_account_info(info)  # type: ignore[no-untyped-call]
     project = get_settings().firebase_project or str(info["project_id"])
     return firestore.Client(project=project, credentials=credentials)

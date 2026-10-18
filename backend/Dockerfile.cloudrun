@@ -1,0 +1,22 @@
+# Cloud Run (deploy/cloudrun/setup.sh): one container is both the API and the
+# worker. Files are processed in this process right after upload
+# (PRUFLO_QUEUE_BACKEND=inline); scheduled work comes from POST
+# /v1/internal/tick, called by Cloud Scheduler (job pruflo-tick).
+FROM python:3.12-slim
+
+WORKDIR /app
+# Logs reach Cloud Logging straight away; no .pyc files in the image.
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# DejaVu fonts let PDF reports show any name or currency symbol, not just Latin-1.
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY alembic.ini start.sh ./
+COPY app ./app
+# Strip Windows line endings: a script checked out on Windows otherwise fails
+# with "no such file or directory" when the container starts.
+RUN sed -i 's/\r$//' start.sh && useradd --create-home pruflo && chmod +x start.sh
+USER pruflo
+
+CMD ["./start.sh"]
