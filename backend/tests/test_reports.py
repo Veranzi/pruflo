@@ -23,7 +23,7 @@ def _pdf_text(client: TestClient, url: str) -> str:
 
 def _decided_case(client: TestClient, make: Factory) -> tuple[Person, Any]:
     reviewer = make.person(Role.REVIEWER, name="Rita Reviewer")
-    case = make.case(reviewer.tenant, reviewer, title="Supplier shortfall – Nairobi ₹ check")
+    case = make.case(reviewer.tenant, reviewer, title="Supplier shortfall – Jakarta ₹ check")
     case.status = "in_review"
     make.db.commit()
     finding = make.finding(case)
@@ -54,7 +54,7 @@ def test_generate_list_and_download_detailed_report(client: TestClient, make: Fa
     text = _pdf_text(client, link)
     for expected in (
         case.reference,
-        "Supplier shortfall – Nairobi ₹ check",
+        "Supplier shortfall – Jakarta ₹ check",
         "Quantity shortfall",
         "100 units",
         "80 units",
