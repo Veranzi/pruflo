@@ -27,7 +27,7 @@ class _SplashScreenState extends State<SplashScreen> {
   void initState() {
     super.initState();
     // Show the brand briefly, and longer only while the session is checked.
-    _minimum = Timer(const Duration(milliseconds: 900), () {
+    _minimum = Timer(const Duration(milliseconds: 2000), () {
       _shownLongEnough = true;
       _maybeContinue();
     });
