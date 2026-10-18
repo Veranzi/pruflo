@@ -1,0 +1,16 @@
+# Files Cloud Build doesn't need (deploy/cloudrun/setup.sh uploads backend/).
+.gcloudignore
+.git
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.local-storage/
+.env
+.env.*
+!.env.example
+*-service-account*.json
+tests/

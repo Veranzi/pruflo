@@ -4,8 +4,8 @@
 in one call: process files still waiting (including retries), reconcile
 cases missed after a crash, re-send failed webhooks, import from document
 sources, apply retention, and send the Monday summary. Every step is safe to
-repeat. A GitHub Actions cron calls it every 30 minutes with
-``X-Pruflo-Tick-Token``; on free hosts that sleep, the call also wakes it.
+repeat. Cloud Scheduler (job pruflo-tick) calls it every 6 hours with
+``X-Pruflo-Tick-Token``.
 """
 
 import hmac

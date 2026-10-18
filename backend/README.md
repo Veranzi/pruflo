@@ -19,7 +19,8 @@ The core rule: **code calculates, AI reads documents and drafts wording, and peo
 - [Operator commands](#operator-commands)
 - [Testing and checks](#testing-and-checks)
 - [Database migrations](#database-migrations)
-- [Deploying to Google Cloud](#deploying-to-google-cloud)
+- [Deploying (Firebase + Cloud SQL + Cloud Run)](#deploying-firebase--cloud-sql--cloud-run)
+- [Full Google Cloud layout (later)](#full-google-cloud-layout-later)
 - [Security notes](#security-notes)
 - [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
@@ -110,7 +111,7 @@ All settings are environment variables with the `PRUFLO_` prefix, read from `bac
 | `PRUFLO_DATES_DAY_FIRST` | `true` | Read 03/10/2026 as 3 October |
 | `PRUFLO_EVIDENCE_RETENTION_DAYS`, `PRUFLO_REPORT_RETENTION_DAYS` | `0` | Delete evidence files (of completed cases) and reports after this many days; 0 keeps them |
 | `PRUFLO_DB_POOL_SIZE`, `PRUFLO_DB_MAX_OVERFLOW` | `5`, `5` | Connections per instance. Keep (pool + overflow) × (API + worker max instances) under the Cloud SQL limit |
-| `PRUFLO_RELEASE` | `dev` | The deployed commit, shown by `/healthz` |
+| `PRUFLO_RELEASE` | `dev` | The deployed commit, shown by `/healthz` and `/readyz` |
 | `PRUFLO_SECRETS_KEY` | – | Fernet key that encrypts webhook signing secrets and document-source credentials, and signs OAuth state. Required outside `local`/`test` |
 | `PRUFLO_INBOUND_EMAIL_DOMAIN` | – | Domain of the email inbox addresses (`evidence+<tag>@<domain>`). With the token, turns the email inbox source on |
 | `PRUFLO_INBOUND_EMAIL_TOKEN` | – | Shared secret the mail service sends to `/v1/inbound/email` (header `X-Pruflo-Inbound-Token` or `?token=`) |
@@ -227,24 +228,24 @@ PRUFLO_ADMIN_DATABASE_URL=... python -m app.cli db-roles --no-create
 
 It's safe to run again; do so after a migration that adds an append-only table. Tables added by later migrations get the runtime grants automatically.
 
-## Deploying for free (Firebase + Cloud SQL + Render)
+## Deploying (Firebase + Cloud SQL + Cloud Run)
 
-The current deployment, with no Google Cloud billing (see `Docs/fix_plan.md`):
+The current deployment; step by step in `Docs/deployment.md`, reasons in `Docs/fix_plan.md`. Two projects: the Firebase project `login-register-125ef` stays on the free Spark plan, and Cloud Run and Gemini run in the billed project `gen-lang-client-0422375595`.
 
 | Piece | Runs on |
 | --- | --- |
 | Web app, sign-in, push | Firebase Hosting, Auth and Cloud Messaging (Spark plan) |
-| Uploaded files and extracted page text | Firestore in the same Firebase project (`PRUFLO_STORAGE_BACKEND=firestore`, `PRUFLO_CONTENT_BACKEND=firestore`) |
-| API and worker | One Render free web service (`render.yaml`, `Dockerfile.render`); files are processed in the API process right after upload (`PRUFLO_QUEUE_BACKEND=inline`) |
-| Scheduled work | `.github/workflows/tick.yml` calls `POST /v1/internal/tick` every 30 minutes |
-| Postgres | Cloud SQL for PostgreSQL: the Firebase SQL Connect no-cost trial instance (public IP, SSL only, authorized networks) |
-| Document reading | Gemini API key (`gemini_api` provider), or the structured reader without one |
+| Uploaded files and extracted page text | Firestore in the Firebase project (`PRUFLO_STORAGE_BACKEND=firestore`, `PRUFLO_CONTENT_BACKEND=firestore`) |
+| API and worker | One Cloud Run service, `pruflo-api` (`Dockerfile.cloudrun`, `start.sh`); files are processed in the API process right after upload (`PRUFLO_QUEUE_BACKEND=inline`) |
+| Scheduled work | Cloud Scheduler job `pruflo-tick` calls `POST /v1/internal/tick` every 6 hours |
+| Postgres | Cloud SQL for PostgreSQL: the Firebase SQL Connect no-cost trial instance, reached through the built-in Cloud SQL connection |
+| Document reading | Gemini on Vertex AI with the service's identity (`vertex_gemini`), or a Gemini API key (`gemini_api`), or the structured reader without either |
 
-`start-render.sh` runs the migrations as `pruflo_migrator` before starting the API. Firestore's security rules deny all browser access: only the backend's service account reads and writes files.
+Deploy, or redeploy after a change, with `./deploy/cloudrun/setup.sh` (Git Bash, from `backend/`). It builds the image with Cloud Build, runs the migrations in the Cloud Run job `pruflo-db-migrate`, then deploys the service. No service-account key is used: the service account `pruflo-api@gen-lang-client-0422375595.iam.gserviceaccount.com` is granted Cloud SQL Client, Cloud Datastore User and Firebase Authentication Viewer in the Firebase project. Firestore's security rules deny all browser access. Check a deployment with `/readyz` (Cloud Run reserves `/healthz`).
 
-## Deploying to Google Cloud
+## Full Google Cloud layout (later)
 
-For a deployment with billing or credits. Plan Step 3 covers this; it hasn't been done yet. The pieces, all in `asia-southeast1`:
+The layout planned in `Docs/backend_plan.md`, Step 3, with a separate worker behind Pub/Sub and Cloud Storage for files. It isn't deployed; the deployment above uses one service instead. The pieces:
 
 | Resource | Notes |
 | --- | --- |
@@ -288,8 +289,11 @@ backend/
     worker/        worker service, job runner, outbox dispatcher
     cli.py         operator commands
   tests/           pytest suite (runs against PostgreSQL)
-  Dockerfile       API image
+  Dockerfile       API image (full layout)
   Dockerfile.worker
+  Dockerfile.cloudrun  API and worker in one image (current deployment)
+  start.sh         start command for Dockerfile.cloudrun
+  deploy/cloudrun/ setup.sh and cloudbuild.yaml for the Cloud Run deployment
   docker-compose.yml
 ```
 

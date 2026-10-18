@@ -1,13 +1,17 @@
-name: Backend scheduled work
+name: Backend scheduled work (run now)
 
-# Calls POST /v1/internal/tick on the API every 30 minutes: retries, missed
+# Calls POST /v1/internal/tick on the Cloud Run API: retries, missed
 # reconciliations, webhook re-sends, document-source imports, retention and
-# the Monday summary. On Render's free plan it also wakes the service.
-# Needs the API_BASE_URL variable and the PRUFLO_TICK_TOKEN secret.
-# (GitHub runs scheduled workflows from the default branch only.)
+# the Monday summary.
+#
+# Cloud Scheduler already calls it every 6 hours (job pruflo-tick, set up by
+# backend/deploy/cloudrun/setup.sh), so this workflow has no schedule of its
+# own: running both would do every task twice. Use "Run workflow" to trigger
+# the work straight away.
+#
+# Needs the API_BASE_URL variable (the Cloud Run URL) and the PRUFLO_TICK_TOKEN
+# secret, set to the value of the pruflo-tick-token secret in Secret Manager.
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -24,9 +28,13 @@ jobs:
           TICK_TOKEN: ${{ secrets.PRUFLO_TICK_TOKEN }}
         run: |
           if [ -z "$API_BASE_URL" ] || [ -z "$TICK_TOKEN" ]; then
-            echo "::warning::Set API_BASE_URL and PRUFLO_TICK_TOKEN to enable scheduled work."
-            exit 0
+            echo "::error::Set the API_BASE_URL variable and the PRUFLO_TICK_TOKEN secret."
+            exit 1
           fi
-          # A sleeping free instance takes about a minute to wake.
-          curl --fail-with-body --silent --show-error --max-time 480 --retry 2 --retry-delay 30 \
-            -X POST "$API_BASE_URL/v1/internal/tick" -H "X-Pruflo-Tick-Token: $TICK_TOKEN"
+          case "$API_BASE_URL" in
+            https://*.run.app|https://*.run.app/) ;;
+            *) echo "::error::API_BASE_URL should be the Cloud Run URL (https://...run.app)."; exit 1;;
+          esac
+          # Cloud Run scales to zero; the first request starts an instance.
+          curl --fail-with-body --silent --show-error --max-time 300 --retry 2 --retry-delay 15 \
+            -X POST "${API_BASE_URL%/}/v1/internal/tick" -H "X-Pruflo-Tick-Token: $TICK_TOKEN"

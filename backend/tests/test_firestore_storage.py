@@ -197,3 +197,29 @@ def test_settings_pick_firestore_and_require_a_signing_key(
         assert isinstance(backend._default_storage(), FirestoreStorage)
     finally:
         backend._default_storage.cache_clear()
+
+
+def test_without_a_key_the_runtime_identity_opens_the_firebase_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Cloud Run there's no key file: Firestore is opened with the runtime
+    identity, in the Firebase project (which may differ from the Cloud Run one)."""
+    from google.cloud import firestore as gfirestore
+
+    from app.config import get_settings
+    from app.storage import backend
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "firebase_credentials", "")
+    monkeypatch.setattr(settings, "firebase_credentials_file", "")
+    monkeypatch.setattr(settings, "gcp_project", "run-project")
+    monkeypatch.setattr(settings, "firebase_project", "firebase-project")
+    opened: dict[str, Any] = {}
+
+    def fake_client(**kwargs: Any) -> str:
+        opened.update(kwargs)
+        return "client"
+
+    monkeypatch.setattr(gfirestore, "Client", fake_client)
+    assert backend.firestore_client() == "client"
+    assert opened == {"project": "firebase-project"}
